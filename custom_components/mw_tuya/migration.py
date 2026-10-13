@@ -25,6 +25,28 @@ from .const import CONF_SELECTED_DEVICES, CONF_SELECTED_SCENES, DOMAIN
 LEGACY_PLATFORMS = ("tuya", "localtuya")
 PRIMARY_DOMAINS = {"light", "fan", "cover", "humidifier", "climate", "vacuum", "camera"}
 LEGACY_SUFFIX = "_legacy"
+# Mais longas primeiro para `binary_sensor` não casar como `sensor`
+MW_PLATFORMS: tuple[str, ...] = (
+    "alarm_control_panel",
+    "binary_sensor",
+    "humidifier",
+    "climate",
+    "camera",
+    "button",
+    "number",
+    "select",
+    "sensor",
+    "switch",
+    "vacuum",
+    "cover",
+    "event",
+    "light",
+    "scene",
+    "siren",
+    "valve",
+    "lock",
+    "fan",
+)
 
 
 @dataclass(slots=True)
@@ -104,6 +126,17 @@ def resolve_legacy(
     return None
 
 
+def parse_mw_unique_id(uid: str) -> tuple[str, str, str] | None:
+    """`{device_id}_{plataforma}_{code}` → tupla; plataformas podem conter `_`."""
+    did, sep, rest = uid.partition("_")
+    if not sep:
+        return None
+    for plat in MW_PLATFORMS:
+        if rest.startswith(f"{plat}_"):
+            return did, plat, rest[len(plat) + 1 :]
+    return None
+
+
 def build_plan(hass: HomeAssistant, coordinators: list[Any]) -> MigrationPlan:
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
@@ -126,9 +159,9 @@ def build_plan(hass: HomeAssistant, coordinators: list[Any]) -> MigrationPlan:
     for ent in ent_reg.entities.values():
         if ent.platform != DOMAIN:
             continue
-        parts = str(ent.unique_id).split("_", 2)
-        if len(parts) == 3:
-            did, plat, code = parts
+        parsed = parse_mw_unique_id(str(ent.unique_id))
+        if parsed:
+            did, plat, code = parsed
             if plat == "scene":
                 mw_scene[code] = ent.entity_id
                 continue

@@ -115,3 +115,17 @@ def test_plano_lista_aparelho_nao_selecionado_em_uso(monkeypatch):
     assert plan.devices_to_select == {"E1": {did}}
     assert plan.scenes_to_select == {"E1": {"g3TtdFwxAf4oqDAP"}}
     assert plan.pairs == []
+
+
+def test_unique_id_mw_com_plataforma_que_tem_underscore():
+    assert mig.parse_mw_unique_id("ebb1d6608c92983977s8nc_binary_sensor_presence_state") == (
+        "ebb1d6608c92983977s8nc",
+        "binary_sensor",
+        "presence_state",
+    )
+    assert mig.parse_mw_unique_id("dev_select_scene_data") == ("dev", "select", "scene_data")
+    assert mig.parse_mw_unique_id("01M4ENTRY_scene_g3TtdFwxAf4oqDAP") == (
+        "01M4ENTRY",
+        "scene",
+        "g3TtdFwxAf4oqDAP",
+    )
