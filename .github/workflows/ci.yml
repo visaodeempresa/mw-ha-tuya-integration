@@ -24,6 +24,31 @@ jobs:
       - name: testes
         run: pytest
 
+  home-assistant:
+    name: importa no HA real (${{ matrix.ha }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ha: ["minimo", "atual"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: instalar o Home Assistant
+        run: |
+          if [ "${{ matrix.ha }}" = "minimo" ]; then
+            V=$(python -c "import json;print(json.load(open('hacs.json'))['homeassistant'])")
+            pip install "homeassistant==$V"
+          else
+            pip install homeassistant
+          fi
+          pip install -r requirements-test.txt
+          python -c "import homeassistant.const as c; print('HA', c.__version__)"
+      - name: importar todas as plataformas
+        run: pytest -q tests/test_ha_imports.py
+
   hassfest:
     name: hassfest (validador oficial do HA)
     runs-on: ubuntu-latest
