@@ -33,12 +33,22 @@ def test_dispositivo_com_local_key_e_ip_eh_hibrido(models):
     assert ("sensor", "cur_current") in plataformas
 
 
-def test_shadow_properties_mapeia_dp_id_e_infere_select_number_button(models):
+def test_thing_model_mapeia_dp_id_e_infere_select_number_button(models):
     dev = models.MwTuyaDevice(
         device_id="ebcc203220f73515cfgmza",
         name="Régua da Mesa",
         category="pc",
         local_key="0123456789abcdef",
+    )
+    spec = models.DpSpec
+    dev.apply_thing_model(
+        {
+            "switch_1": spec("switch_1", 1, "rw", "bool"),
+            "countdown_1": spec("countdown_1", 9, "rw", "value", 0, 86400, 0, 1, "s"),
+            "relay_status": spec("relay_status", 38, "rw", "enum", range=["off", "on", "memory"]),
+            "child_lock": spec("child_lock", 41, "rw", "bool"),
+            "reset_add_ele": spec("reset_add_ele", 201, "rw", "bool"),
+        }
     )
     dev.apply_shadow_properties(
         [
@@ -98,3 +108,16 @@ def test_cena_serializacao(models):
     assert copia.scene_id == "tys123"
     assert copia.name == "Cinema"
     assert copia.home_name == "Casa Principal"
+
+
+def test_sem_thing_model_nao_cria_controle_por_palpite(models):
+    dev = models.MwTuyaDevice(
+        device_id="dev2",
+        name="Sem modelo",
+        category="pc",
+        status={"switch_1": True, "relay_status": "memory", "countdown_1": 0},
+    )
+    by_code = {s.code: s for s in models.infer_entity_specs(dev)}
+    assert by_code["switch_1"].platform == "switch"
+    assert by_code["relay_status"].platform == "sensor"
+    assert by_code["countdown_1"].platform == "sensor"

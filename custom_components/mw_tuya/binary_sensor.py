@@ -1,11 +1,8 @@
-"""Plataforma `binary_sensor` da MW Tuya Integration."""
+"""Plataforma `binary_sensor`: contato, movimento, presença, vazamento..."""
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
-    BinarySensorEntity,
-)
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -15,15 +12,6 @@ from .coordinator import MwTuyaCoordinator
 from .entity import MwTuyaEntity
 from .models import infer_entity_specs
 
-_BIN_CLASS_MAP: dict[str, BinarySensorDeviceClass] = {
-    "door": BinarySensorDeviceClass.DOOR,
-    "motion": BinarySensorDeviceClass.MOTION,
-    "occupancy": BinarySensorDeviceClass.OCCUPANCY,
-    "safety": BinarySensorDeviceClass.SAFETY,
-    "vibration": BinarySensorDeviceClass.VIBRATION,
-    "moisture": BinarySensorDeviceClass.MOISTURE,
-}
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -31,29 +19,29 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: MwTuyaCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[MwTuyaBinarySensor] = []
-    for dev in coordinator.active_devices:
-        for spec in infer_entity_specs(dev):
-            if spec.platform == "binary_sensor":
-                entities.append(MwTuyaBinarySensor(coordinator, dev, spec))
-    async_add_entities(entities)
+    async_add_entities(
+        MwTuyaBinarySensor(coordinator, dev, spec)
+        for dev in coordinator.active_devices
+        for spec in infer_entity_specs(dev)
+        if spec.platform == "binary_sensor"
+    )
 
 
 class MwTuyaBinarySensor(MwTuyaEntity, BinarySensorEntity):
-    """Sensor binário de presença, movimento, contato ou alarme."""
+    """Sensor binário derivado de DP bool ou enum."""
 
-    def __init__(self, coordinator: MwTuyaCoordinator, device, spec) -> None:
+    def __init__(self, coordinator, device, spec) -> None:
         super().__init__(coordinator, device, spec)
-        if spec.device_class and spec.device_class in _BIN_CLASS_MAP:
-            self._attr_device_class = _BIN_CLASS_MAP[spec.device_class]
+        if spec.device_class:
+            try:
+                self._attr_device_class = BinarySensorDeviceClass(spec.device_class)
+            except ValueError:
+                self._attr_device_class = None
+        self._on_values = {o.lower() for o in spec.options} or {"true"}
 
     @property
     def is_on(self) -> bool | None:
         val = self.dp_value
         if val is None:
             return None
-        if isinstance(val, bool):
-            return val
-        if self._spec.options:
-            return str(val).lower() in {o.lower() for o in self._spec.options}
-        return bool(val)
+        return str(val).lower() in self._on_values

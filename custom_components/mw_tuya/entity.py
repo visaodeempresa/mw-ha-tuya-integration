@@ -29,6 +29,9 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
         self._spec = spec
         self._attr_unique_id = f"{device.device_id}_{spec.platform}_{spec.code}"
         self._attr_name = spec.name
+        self._attr_entity_registry_enabled_default = spec.enabled_default
+        if spec.icon:
+            self._attr_icon = spec.icon
         if spec.entity_category == "config":
             self._attr_entity_category = EntityCategory.CONFIG
         elif spec.entity_category == "diagnostic":
@@ -64,6 +67,16 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
         if dev is None:
             return None
         return dev.status.get(self._spec.code)
+
+    def status_of(self, code: str | None) -> Any:
+        dev = self.device_obj
+        if dev is None or not code:
+            return None
+        return dev.status.get(code)
+
+    async def send(self, commands: dict[str, Any]) -> None:
+        """Envia vários DPs de uma vez (um único frame local quando possível)."""
+        await self.coordinator.async_send_device_commands(self._device_id, commands)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

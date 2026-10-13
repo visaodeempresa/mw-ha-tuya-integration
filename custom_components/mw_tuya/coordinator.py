@@ -34,6 +34,7 @@ from .const import (
     STORAGE_KEY_PREFIX,
     STORAGE_VERSION,
 )
+from .dpspec import DpSpec, encode_local
 from .local import TuyaLocalClient, TuyaLocalError, async_discover_lan_devices
 from .models import MwTuyaDevice, MwTuyaScene
 
@@ -170,6 +171,10 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cached = await self._store.async_load() or {}
         if isinstance(cached.get("lan_map"), dict):
             self.lan_map.update(cached["lan_map"])
+        models_cache: dict[str, dict[str, DpSpec]] = {}
+        for key, raw_specs in (cached.get("models") or {}).items():
+            if isinstance(raw_specs, dict):
+                models_cache[key] = {c: DpSpec.from_dict(s) for c, s in raw_specs.items()}
 
         harvested = self._harvest_existing_ha_hosts()
         for did, info in harvested.items():
@@ -200,6 +205,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 dev.local_version = versions_override[dev.device_id].strip()
 
             if dev.device_id in selected_set:
+                cache_key = dev.product_id or dev.device_id
+                specs = models_cache.get(cache_key)
+                if not specs:
+                    specs = await self.client.async_get_thing_model(dev.device_id)
+                    if specs:
+                        models_cache[cache_key] = specs
+                dev.apply_thing_model(specs or {})
                 props = await self.client.async_get_shadow_properties(dev.device_id)
                 if props:
                     dev.apply_shadow_properties(props)
@@ -221,6 +233,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "lan_map": self.lan_map,
                 "devices": {k: v.to_dict() for k, v in self.catalog_devices.items()},
                 "scenes": {k: v.to_dict() for k, v in self.catalog_scenes.items()},
+                "models": {
+                    k: {c: s.to_dict() for c, s in v.items()} for k, v in models_cache.items()
+                },
             }
         )
         _LOGGER.info(
@@ -314,37 +329,49 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         value: Any,
         dp_id: int | None = None,
     ) -> str:
-        """Envia comando ao dispositivo priorizando Local (TCP 6668) com Fallback Cloud.
+        """Compat: envia um único DP (ver `async_send_device_commands`)."""
+        dev = self.catalog_devices.get(device_id)
+        if dev and dp_id is not None and dev.resolve_dp_id(code) is None:
+            dev.dp_map[code] = int(dp_id)
+        return await self.async_send_device_commands(device_id, {code: value})
 
-        Retorna a rota efetivamente utilizada: `"local"`, `"cloud_fallback"` ou `"cloud"`.
+    async def async_send_device_commands(self, device_id: str, commands: dict[str, Any]) -> str:
+        """Envia vários DPs priorizando Local (um único frame TCP 6668) com fallback Cloud.
+
+        Só vai local se TODOS os códigos tiverem `dp_id` conhecido — nunca chuta DP.
+        Retorna a rota usada: `"local"`, `"cloud_fallback"` ou `"cloud"`.
         """
         dev = self.catalog_devices.get(device_id)
         if not dev:
             raise HomeAssistantError(
                 f"Dispositivo {device_id} não encontrado na conta {self.account_name}"
             )
+        if not commands:
+            return "noop"
 
         routing = self.routing_mode
-        resolved_dp = dp_id if dp_id is not None else dev.resolve_dp_id(code)
         local_client = self.local_clients.get(device_id)
+        dps: dict[str, Any] = {}
+        for code, value in commands.items():
+            dp = dev.resolve_dp_id(code)
+            if dp is None:
+                dps = {}
+                break
+            dps[str(dp)] = encode_local(code, value, dev.local_hex_len.get(code))
 
         can_try_local = (
             routing != ROUTING_CLOUD_ONLY
             and local_client is not None
-            and resolved_dp is not None
+            and bool(dps)
             and self.local_ok.get(device_id, True)
         )
 
-        if can_try_local and local_client is not None and resolved_dp is not None:
+        if can_try_local and local_client is not None:
             try:
-                ok = await local_client.async_set_dps(
-                    {str(resolved_dp): value}, node_id=dev.node_id
-                )
-                if ok:
+                if await local_client.async_set_dps(dps, node_id=dev.node_id):
                     self._record_stat(device_id, "local_ok")
                     self._local_misses[device_id] = 0
-                    dev.status[code] = value
-                    dev.raw_dps[resolved_dp] = value
+                    dev.status.update(commands)
                     self.async_set_updated_data(self.data or {})
                     return "local"
             except TuyaLocalError as err:
@@ -358,7 +385,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         f"Falha no envio local para {dev.name} ({dev.local_ip}): {err}"
                     ) from err
                 _LOGGER.info(
-                    "MW Tuya [%s]: envio local para %s (%s) falhou (%s); acionando fallback Cloud",
+                    "MW Tuya [%s]: envio local para %s (%s) falhou (%s); fallback Cloud",
                     self.account_name,
                     dev.name,
                     dev.local_ip,
@@ -370,11 +397,12 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Dispositivo {dev.name} está em modo local_only mas não possui rota local ativa."
             )
 
-        # Envio Cloud (direto ou fallback)
-        await self.client.async_send_commands(device_id, [{"code": code, "value": value}])
+        await self.client.async_send_commands(
+            device_id, [{"code": c, "value": v} for c, v in commands.items()]
+        )
         route = "cloud_fallback" if can_try_local else "cloud"
         self._record_stat(device_id, route)
-        dev.status[code] = value
+        dev.status.update(commands)
         self.async_set_updated_data(self.data or {})
         return route
 

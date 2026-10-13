@@ -19,6 +19,7 @@ from typing import Any
 
 import aiohttp
 
+from .dpspec import parse_thing_model
 from .models import MwTuyaDevice, MwTuyaScene
 from .security import SignatureBuilder, TokenManager
 
@@ -246,6 +247,15 @@ class TuyaCloudClient:
         except TuyaApiError as err:
             _LOGGER.debug("Shadow properties indisponível para %s: %s", device_id, err)
         return []
+
+    async def async_get_thing_model(self, device_id: str) -> dict[str, Any]:
+        """Obtém o Thing Model (`/v2.0/cloud/thing/{id}/model`) já parseado em `{code: DpSpec}`."""
+        try:
+            res = await self.async_get(f"/v2.0/cloud/thing/{device_id}/model")
+        except TuyaApiError as err:
+            _LOGGER.debug("Thing Model indisponível para %s: %s", device_id, err)
+            return {}
+        return parse_thing_model(res)
 
     # ------------------------------------------------------------------ Comandos
     async def async_send_commands(self, device_id: str, commands: list[dict[str, Any]]) -> bool:

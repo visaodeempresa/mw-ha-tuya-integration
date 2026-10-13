@@ -90,11 +90,9 @@ class MwTuyaClimate(MwTuyaEntity, ClimateEntity):
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
-            await self.coordinator.async_send_device_command(
-                self._device_id, "switch", False, dp_id=1
-            )
+            await self.coordinator.async_send_device_command(self._device_id, "switch", False)
             return
-        await self.coordinator.async_send_device_command(self._device_id, "switch", True, dp_id=1)
+        await self.coordinator.async_send_device_command(self._device_id, "switch", True)
         mode_map = {
             HVACMode.COOL: "cold",
             HVACMode.HEAT: "hot",
@@ -103,12 +101,12 @@ class MwTuyaClimate(MwTuyaEntity, ClimateEntity):
         }
         if hvac_mode in mode_map:
             await self.coordinator.async_send_device_command(
-                self._device_id, "mode", mode_map[hvac_mode], dp_id=4
+                self._device_id, "mode", mode_map[hvac_mode]
             )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is not None:
             await self.coordinator.async_send_device_command(
-                self._device_id, "temp_set", round(float(temp)), dp_id=2
+                self._device_id, "temp_set", round(float(temp))
             )
