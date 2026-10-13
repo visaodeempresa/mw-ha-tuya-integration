@@ -1,8 +1,10 @@
 """Fluxo de configuração em duas etapas da MW Tuya Integration:
 
-1. `async_step_user`: Adiciona e valida uma conta Tuya IoT (permite múltiplas contas
-   ativas ao mesmo tempo). Extrai automaticamente todas as `local_key`, categorias e
-   cenas, cruzando com a descoberta LAN UDP — **sem criar nenhuma entidade ainda**.
+1. `async_step_user`: escolhe o canal — Smart Life (QR Code, mesmo da Tuya nativa,
+   sem cota) ou Tuya IoT OpenAPI (Access ID/Secret). Adiciona e valida a conta
+   (permite múltiplas contas ativas ao mesmo tempo). Extrai automaticamente todas as
+   `local_key`, categorias e cenas, cruzando com a descoberta LAN UDP — **sem criar
+   nenhuma entidade ainda**.
 2. `MwTuyaOptionsFlow` (botão **Configurar** na tela da integração):
    - `select_devices`: Selecionar quais dispositivos daquela conta entram no HA.
    - `select_scenes`: Selecionar quais cenas (Tap-to-Run) daquela conta entram no HA.
@@ -28,6 +30,9 @@ from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    QrCodeSelector,
+    QrCodeSelectorConfig,
+    QrErrorCorrectionLevel,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -45,7 +50,9 @@ from .const import (
     CONF_ROUTING_MODE,
     CONF_SELECTED_DEVICES,
     CONF_SELECTED_SCENES,
+    CONF_SMARTLIFE,
     CONF_UID,
+    CONF_USER_CODE,
     DOMAIN,
     REGIONS,
     ROUTING_HYBRID_LOCAL_FIRST,
@@ -53,6 +60,7 @@ from .const import (
 )
 from .coordinator import MwTuyaCoordinator
 from .local import async_discover_lan_devices
+from .smartlife import poll_login, qr_payload, request_qr
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,12 +81,113 @@ STEP_ACCOUNT_SCHEMA = vol.Schema(
 )
 
 
-class MwTuyaConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Fluxo de adição de uma conta Tuya IoT."""
+STEP_SMARTLIFE_SCHEMA = vol.Schema(
+    {
+        vol.Required(CONF_ACCOUNT_NAME, default="Conta Smart Life"): str,
+        vol.Required(CONF_USER_CODE): str,
+    }
+)
+
+
+class _SmartLifeQrMixin:
+    """Login Smart Life por QR Code, compartilhado pelo fluxo da conta e pelas opções."""
+
+    _sl_user_code: str = ""
+    _sl_account: str = ""
+    _sl_qr: str = ""
+
+    async def _async_new_qr(self) -> tuple[bool, dict[str, Any]]:
+        ok, res = await self.hass.async_add_executor_job(request_qr, self._sl_user_code)
+        if ok:
+            self._sl_qr = str(res.get("qrcode") or "")
+        return ok and bool(self._sl_qr), res
+
+    def _qr_form(self, errors: dict[str, str] | None = None, msg: str = "") -> ConfigFlowResult:
+        return self.async_show_form(
+            step_id="smartlife_scan",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("qr"): QrCodeSelector(
+                        QrCodeSelectorConfig(
+                            data=qr_payload(self._sl_qr),
+                            scale=5,
+                            error_correction_level=QrErrorCorrectionLevel.QUARTILE,
+                        )
+                    )
+                }
+            ),
+            errors=errors or {},
+            description_placeholders={"msg": msg},
+        )
+
+    async def async_step_smartlife(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        msg = ""
+        if user_input is not None:
+            self._sl_user_code = user_input[CONF_USER_CODE].strip()
+            self._sl_account = user_input.get(CONF_ACCOUNT_NAME, "").strip()
+            ok, res = await self._async_new_qr()
+            if ok:
+                return self._qr_form()
+            errors["base"] = "login_error"
+            msg = f"[{res.get('code', '?')}] {res.get('msg', '')}"
+        return self.async_show_form(
+            step_id="smartlife",
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_SMARTLIFE_SCHEMA, user_input or {}
+            ),
+            errors=errors,
+            description_placeholders={"msg": msg},
+        )
+
+    async def async_step_smartlife_scan(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        ok, info = await self.hass.async_add_executor_job(
+            poll_login, self._sl_qr, self._sl_user_code
+        )
+        if not ok:
+            await self._async_new_qr()
+            return self._qr_form(
+                {"base": "login_error"}, f"[{info.get('code', '?')}] {info.get('msg', '')}"
+            )
+        return await self._async_smartlife_done(info)
+
+    async def _async_smartlife_done(self, info: dict[str, Any]) -> ConfigFlowResult:
+        raise NotImplementedError
+
+
+class MwTuyaConfigFlow(_SmartLifeQrMixin, ConfigFlow, domain=DOMAIN):
+    """Fluxo de adição de uma conta Tuya (Smart Life ou IoT OpenAPI)."""
 
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="user", menu_options=["smartlife", "openapi"])
+
+    async def _async_smartlife_done(self, info: dict[str, Any]) -> ConfigFlowResult:
+        uid = info["token_info"]["uid"]
+        await self.async_set_unique_id(f"smartlife:{uid}")
+        self._abort_if_unique_id_configured()
+        account = self._sl_account or info.get("username") or "Smart Life"
+        return self.async_create_entry(
+            title=f"MW Tuya · {account}",
+            data={
+                CONF_ACCOUNT_NAME: account,
+                CONF_SMARTLIFE: info,
+                CONF_SELECTED_DEVICES: [],
+                CONF_SELECTED_SCENES: [],
+                CONF_LOCAL_HOSTS: {},
+                CONF_LOCAL_VERSIONS: {},
+                CONF_ROUTING_MODE: ROUTING_HYBRID_LOCAL_FIRST,
+            },
+        )
+
+    async def async_step_openapi(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -136,7 +245,7 @@ class MwTuyaConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
 
         return self.async_show_form(
-            step_id="user",
+            step_id="openapi",
             data_schema=STEP_ACCOUNT_SCHEMA,
             errors=errors,
         )
@@ -147,8 +256,16 @@ class MwTuyaConfigFlow(ConfigFlow, domain=DOMAIN):
         return MwTuyaOptionsFlow()
 
 
-class MwTuyaOptionsFlow(OptionsFlow):
+class MwTuyaOptionsFlow(_SmartLifeQrMixin, OptionsFlow):
     """Gerenciador da conta na tela da integração (Devices, Cenas e Modo Híbrido Local/Cloud)."""
+
+    async def _async_smartlife_done(self, info: dict[str, Any]) -> ConfigFlowResult:
+        entry = self.config_entry
+        self.hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_SMARTLIFE: info}
+        )
+        self.hass.config_entries.async_schedule_reload(entry.entry_id)
+        return self.async_create_entry(data=dict(entry.options))
 
     def _coordinator(self) -> MwTuyaCoordinator | None:
         return self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
@@ -157,6 +274,7 @@ class MwTuyaOptionsFlow(OptionsFlow):
         return self.async_show_menu(
             step_id="init",
             menu_options=[
+                "smartlife",
                 "select_devices",
                 "select_scenes",
                 "configure_local",

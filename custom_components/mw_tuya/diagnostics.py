@@ -11,7 +11,14 @@ from homeassistant.core import HomeAssistant
 from .const import CONF_CLIENT_SECRET, DOMAIN
 from .coordinator import MwTuyaCoordinator
 
-TO_REDACT = {CONF_CLIENT_SECRET, "local_key", "access_token", "refresh_token"}
+TO_REDACT = {
+    CONF_CLIENT_SECRET,
+    "local_key",
+    "access_token",
+    "refresh_token",
+    "user_code",
+    "terminal_id",
+}
 
 
 async def async_get_config_entry_diagnostics(

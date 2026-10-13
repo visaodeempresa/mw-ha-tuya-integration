@@ -46,7 +46,7 @@ jobs:
           fi
           pip install -r requirements-test.txt
           # dependências que o componente `camera` do HA importa (stream/jpeg)
-          pip install numpy PyTurboJPEG
+          pip install numpy PyTurboJPEG "tuya-device-sharing-sdk>=0.2.8"
           python -c "import homeassistant.const as c; print('HA', c.__version__)"
       - name: suíte completa contra o HA real (imports, fábrica, migração)
         run: pytest -q

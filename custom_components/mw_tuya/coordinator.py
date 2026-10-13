@@ -41,6 +41,7 @@ from .dpspec import DpSpec, encode_local
 from .local import TuyaLocalClient, TuyaLocalError, async_discover_lan_devices
 from .models import MwTuyaDevice, MwTuyaScene
 from .push import TuyaPushHub, get_hub, status_from_event
+from .smartlife import SmartLifeError, SmartLifeSession, raw_from_device, specs_from_device
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -56,7 +57,8 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        client: TuyaCloudClient,
+        client: TuyaCloudClient | None,
+        smartlife: SmartLifeSession | None = None,
     ) -> None:
         scan_interval = int(
             entry.options.get(CONF_SCAN_INTERVAL)
@@ -71,6 +73,12 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             config_entry=entry,
         )
         self.client = client
+        self.smartlife = smartlife
+        # device_ids / scene_ids atendidos pelo canal Smart Life
+        self.sl_devices: set[str] = set()
+        self.sl_scenes: set[str] = set()
+        self._sl_seen: dict[str, dict[str, Any]] = {}
+        self.options_snapshot: dict[str, Any] = {}
         self.account_name = str(
             entry.data.get(CONF_ACCOUNT_NAME) or entry.data.get(CONF_UID) or "Conta Tuya"
         )
@@ -95,10 +103,6 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._push_listeners: dict[str, set[Callable[[dict[str, Any]], None]]] = {}
 
     # ------------------------------------------------------------------ Push
-    @property
-    def push_connected(self) -> bool:
-        return bool(self._push_hub and self._push_hub.connected)
-
     @callback
     def async_add_push_listener(
         self, device_id: str, listener: Callable[[dict[str, Any]], None]
@@ -110,21 +114,47 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         return _remove
 
+    @property
+    def push_connected(self) -> bool:
+        if self.smartlife is not None:
+            return self.smartlife.mq_connected
+        return bool(self._push_hub and self._push_hub.connected)
+
     @callback
     def async_start_push(
         self, session: Any, base_url: str, access_id: str, secret: str
     ) -> Callable[[], None]:
+        """Message Service (Pulsar) — só para contas sem o canal Smart Life."""
         self._push_hub = get_hub(session, base_url, access_id, secret)
         return self._push_hub.add_listener(self._on_push_event)
+
+    async def async_start_smartlife_push(self) -> None:
+        if self.smartlife is None:
+            return
+        loop = self.hass.loop
+
+        def _from_thread(did: str, status: dict[str, Any], online: bool | None) -> None:
+            loop.call_soon_threadsafe(self._on_push_status, did, status, online)
+
+        await self.hass.async_add_executor_job(self.smartlife.start_push, _from_thread)
+
+    async def async_stop_smartlife(self) -> None:
+        if self.smartlife is not None:
+            await self.hass.async_add_executor_job(self.smartlife.stop)
 
     @callback
     def _on_push_event(self, event: dict[str, Any]) -> None:
         did, status, online = status_from_event(event)
+        self._on_push_status(did, status, online)
+
+    @callback
+    def _on_push_status(self, did: str, status: dict[str, Any], online: bool | None) -> None:
         dev = self.catalog_devices.get(did)
         if dev is None or did not in set(self.selected_device_ids):
             return
         if status:
             dev.merge_cloud_status([{"code": c, "value": v} for c, v in status.items()])
+            self._sl_seen.setdefault(did, {}).update(status)
         if online is not None:
             dev.online = online
         self._record_stat(did, "push")
@@ -239,12 +269,68 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception as err:
                 _LOGGER.debug("Varredura UDP LAN falhou: %s", err)
 
-        devices = await self.client.async_list_devices(self.lan_map)
-        scenes = await self.client.async_list_scenes()
+        selected_set = set(self.selected_device_ids)
+        devices: list[MwTuyaDevice] = []
+        scenes: list[MwTuyaScene] = []
+        if self.client is not None:
+            try:
+                devices = await self.client.async_list_devices(self.lan_map)
+                scenes = await self.client.async_list_scenes()
+            except TuyaApiError:
+                if self.smartlife is None:
+                    raise
+                _LOGGER.warning(
+                    "MW Tuya [%s]: OpenAPI indisponível, usando Smart Life", self.account_name
+                )
+
+        # Canal Smart Life: aparelhos, status, local_key, specs e cenas
+        sl_specs: dict[str, dict[str, DpSpec]] = {}
+        self.sl_devices.clear()
+        self.sl_scenes.clear()
+        if self.smartlife is not None:
+            sl = self.smartlife
+            await self.hass.async_add_executor_job(sl.load, selected_set)
+            by_id = {d.device_id: d for d in devices}
+            for did, sdev in sl.devices.items():
+                raw = raw_from_device(sdev)
+                if did in by_id:
+                    dev = by_id[did]
+                    dev.online = raw["online"]
+                    if raw["local_key"]:
+                        dev.local_key = raw["local_key"]
+                    dev.merge_cloud_status(raw["status"])
+                else:
+                    dev = MwTuyaDevice.from_api(raw, self.lan_map.get(did))
+                    devices.append(dev)
+                    by_id[did] = dev
+                self.sl_devices.add(did)
+                if did in selected_set:
+                    sl_specs[did] = specs_from_device(sdev)
+            homes = sl.homes()
+            sl_scene_list = await self.hass.async_add_executor_job(sl.scenes)
+            known = {s.scene_id for s in scenes}
+            for item in sl_scene_list:
+                sid = str(getattr(item, "scene_id", "") or "")
+                if not sid:
+                    continue
+                self.sl_scenes.add(sid)
+                if sid in known:
+                    continue
+                home_id = str(getattr(item, "home_id", "") or "")
+                scenes.append(
+                    MwTuyaScene(
+                        scene_id=sid,
+                        name=str(getattr(item, "name", "") or sid).strip(),
+                        home_id=home_id,
+                        home_name=homes.get(home_id, ""),
+                        enabled=bool(getattr(item, "enabled", True)),
+                    )
+                )
+            devices.sort(key=lambda d: d.name.lower())
+            scenes.sort(key=lambda s: s.name.lower())
 
         hosts_override = self.configured_local_hosts
         versions_override = self.configured_local_versions
-        selected_set = set(self.selected_device_ids)
 
         self.catalog_devices.clear()
         self.local_clients.clear()
@@ -258,7 +344,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         selected_devs = [d for d in devices if d.device_id in selected_set]
 
-        # Thing Model: 1 chamada por produto (cache persistente)
+        # Thing Model (OpenAPI): 1 chamada por produto (cache persistente)
         for dev in selected_devs:
             key = dev.product_id or dev.device_id
             if key not in models_cache:
@@ -268,20 +354,29 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for key, specs in models_cache.items()
             if not specs and any((d.product_id or d.device_id) == key for d in selected_devs)
         ]
-        fetched = await asyncio.gather(
-            *(self.client.async_get_thing_model(d.device_id) for d in missing)
-        )
-        for dev, specs in zip(missing, fetched, strict=True):
-            if specs:
-                models_cache[dev.product_id or dev.device_id] = specs
+        if self.client is not None and missing:
+            fetched = await asyncio.gather(
+                *(self.client.async_get_thing_model(d.device_id) for d in missing)
+            )
+            for dev, specs in zip(missing, fetched, strict=True):
+                if specs:
+                    models_cache[dev.product_id or dev.device_id] = specs
         models_cache = {k: v for k, v in models_cache.items() if v}
 
         # Shadow (valores + nomes personalizados dos canais) em paralelo
-        shadows = await asyncio.gather(
-            *(self.client.async_get_shadow_properties(d.device_id) for d in selected_devs)
-        )
+        if self.client is not None:
+            shadows = await asyncio.gather(
+                *(self.client.async_get_shadow_properties(d.device_id) for d in selected_devs)
+            )
+        else:
+            shadows = [[] for _ in selected_devs]
         for dev, props in zip(selected_devs, shadows, strict=True):
-            dev.apply_thing_model(models_cache.get(dev.product_id or dev.device_id) or {})
+            model = models_cache.get(dev.product_id or dev.device_id) or {}
+            # Thing Model é a fonte da verdade; sem ele, a spec do Smart Life
+            dev.apply_thing_model(model or sl_specs.get(dev.device_id) or {})
+            for code, spec in (sl_specs.get(dev.device_id) or {}).items():
+                if spec.dp_id is not None and code not in dev.dp_map:
+                    dev.dp_map[code] = spec.dp_id
             if props:
                 dev.apply_shadow_properties(props)
             if dev.is_local_configured:
@@ -321,8 +416,25 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         selected = set(self.selected_device_ids)
         routing = self.routing_mode
 
+        # 0. Smart Life: o SDK mantém o status vivo via MQTT — só copia da memória
+        if self.smartlife is not None and routing != ROUTING_LOCAL_ONLY:
+            for did in selected & self.sl_devices:
+                sdev = self.smartlife.devices.get(did)
+                dev = self.catalog_devices.get(did)
+                if sdev is None or dev is None:
+                    continue
+                dev.online = bool(getattr(sdev, "online", dev.online))
+                seen = self._sl_seen.setdefault(did, {})
+                changed = {
+                    k: v for k, v in (sdev.status or {}).items() if k not in seen or seen[k] != v
+                }
+                if changed:
+                    dev.merge_cloud_status(changed)
+                    seen.update(changed)
+
         # 1. Atualiza estado da nuvem em 1 única chamada por conta (econômico em QPS)
-        if routing != ROUTING_LOCAL_ONLY:
+        needs_openapi = bool(selected - self.sl_devices)
+        if routing != ROUTING_LOCAL_ONLY and self.client is not None and needs_openapi:
             try:
                 raw_devices = await self.client.async_list_raw_devices()
                 for raw in raw_devices:
@@ -484,9 +596,18 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Dispositivo {dev.name} está em modo local_only mas não possui rota local ativa."
             )
 
-        await self.client.async_send_commands(
-            device_id, [{"code": c, "value": v} for c, v in commands.items()]
-        )
+        payload = [{"code": c, "value": v} for c, v in commands.items()]
+        if self.smartlife is not None and device_id in self.sl_devices:
+            try:
+                await self.hass.async_add_executor_job(self.smartlife.send, device_id, payload)
+            except SmartLifeError as err:
+                raise HomeAssistantError(
+                    f"Smart Life recusou o comando para {dev.name}: {err}"
+                ) from err
+        elif self.client is not None:
+            await self.client.async_send_commands(device_id, payload)
+        else:
+            raise HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
         route = "cloud_fallback" if can_try_local else "cloud"
         self._record_stat(device_id, route)
         dev.status.update(commands)
@@ -498,7 +619,25 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         scene = self.catalog_scenes.get(scene_id)
         if not scene:
             raise HomeAssistantError(f"Cena {scene_id} não encontrada na conta {self.account_name}")
+        if self.smartlife is not None and scene_id in self.sl_scenes:
+            await self.hass.async_add_executor_job(
+                self.smartlife.trigger_scene, scene.home_id, scene.scene_id
+            )
+            return True
+        if self.client is None:
+            raise HomeAssistantError(f"Cena {scene.name} sem rota de nuvem disponível")
         return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
+
+    async def async_stream_url(self, device_id: str) -> str | None:
+        """URL RTSP da câmera: Smart Life (sem assinatura extra) ou OpenAPI."""
+        if self.smartlife is not None and device_id in self.sl_devices:
+            return await self.hass.async_add_executor_job(self.smartlife.stream_url, device_id)
+        if self.client is None:
+            return None
+        res = await self.client.async_post(
+            f"/v1.0/devices/{device_id}/stream/actions/allocate", {"type": "rtsp"}
+        )
+        return res.get("url") if isinstance(res, dict) else None
 
     def _record_stat(self, device_id: str, key: str) -> None:
         bucket = self.stats.setdefault(device_id, {})

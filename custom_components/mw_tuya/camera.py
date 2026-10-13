@@ -23,6 +23,7 @@ from .const import DOMAIN
 from .coordinator import MwTuyaCoordinator
 from .entity import MwTuyaEntity
 from .models import infer_entity_specs
+from .smartlife import SmartLifeError
 
 _LOGGER = logging.getLogger(__name__)
 # URLs RTSP da Tuya expiram; renova antes disso
@@ -85,11 +86,9 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
         if self._stream_url and time.monotonic() - self._stream_at < STREAM_TTL:
             return self._stream_url
         try:
-            res = await self.coordinator.client.async_post(
-                f"/v1.0/devices/{self._device_id}/stream/actions/allocate", {"type": "rtsp"}
-            )
-        except TuyaApiError as err:
-            if err.code in (28841101, 1106):
+            url = await self.coordinator.async_stream_url(self._device_id)
+        except (TuyaApiError, SmartLifeError) as err:
+            if getattr(err, "code", None) in (28841101, 1106):
                 self._stream_denied = True
                 _LOGGER.warning(
                     "Câmera %s sem vídeo: assine o serviço 'IoT Video Live Stream' no "
@@ -99,7 +98,9 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
             else:
                 _LOGGER.debug("Falha ao alocar stream de %s: %s", self.entity_id, err)
             return None
-        url = (res or {}).get("url") if isinstance(res, dict) else None
+        except Exception as err:
+            _LOGGER.debug("Falha ao alocar stream de %s: %s", self.entity_id, err)
+            return None
         self._stream_url, self._stream_at = url, time.monotonic()
         return url
 

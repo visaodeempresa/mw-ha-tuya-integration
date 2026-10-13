@@ -2,6 +2,14 @@
   "config": {
     "step": {
       "user": {
+        "title": "Adicionar Conta Tuya",
+        "description": "Escolha o canal de nuvem da conta. Smart Life usa o mesmo login por QR Code da integração Tuya nativa (sem cota, push em tempo real, vídeo das câmeras). Tuya IoT OpenAPI usa Access ID/Secret de um projeto do iot.tuya.com.",
+        "menu_options": {
+          "smartlife": "Smart Life / Tuya Smart (QR Code) — recomendado",
+          "openapi": "Tuya IoT OpenAPI (Access ID / Secret)"
+        }
+      },
+      "openapi": {
         "title": "Adicionar Conta Tuya IoT",
         "description": "Valida as credenciais da conta na Tuya Cloud OpenAPI e coleta todo o inventário (incluindo local_key e cenas). Nenhuma entidade de dispositivo ou cena é criada agora: após adicionar a conta, clique em Configurar na entrada da conta para escolher exatamente quais dispositivos e cenas entram no Home Assistant.",
         "data": {
@@ -11,11 +19,24 @@
           "client_secret": "Access Secret / Client Secret",
           "uid": "UID do Aplicativo Tuya / Smart Life"
         }
+      },
+      "smartlife": {
+        "title": "Conta Smart Life",
+        "description": "No app Smart Life ou Tuya Smart: Eu → Configurações → Conta e Segurança → User Code. Cole o código abaixo. {msg}",
+        "data": {
+          "account_name": "Nome da Conta (ex.: Casa Principal)",
+          "user_code": "User Code do app"
+        }
+      },
+      "smartlife_scan": {
+        "title": "Escaneie o QR Code",
+        "description": "Abra o app Smart Life/Tuya Smart → ícone de leitura (canto superior direito) → escaneie o código e confirme o login no app. Depois clique em Enviar. {msg}"
       }
     },
     "error": {
       "cannot_connect": "Não foi possível conectar à Tuya Cloud OpenAPI. Verifique a região e a conexão de rede.",
-      "invalid_auth": "Credenciais recusadas pela Tuya Cloud. Confira Access ID, Access Secret e UID."
+      "invalid_auth": "Credenciais recusadas pela Tuya Cloud. Confira Access ID, Access Secret e UID.",
+      "login_error": "Login Smart Life falhou. Confira o User Code e escaneie o QR novamente."
     },
     "abort": {
       "already_configured": "Esta conta Tuya já está configurada no MW Tuya Integration."
@@ -26,6 +47,7 @@
       "init": {
         "title": "Gerenciar Conta Tuya",
         "menu_options": {
+          "smartlife": "Conectar Smart Life (QR Code) — controle sem cota e push em tempo real",
           "select_devices": "Selecionar Dispositivos que entram no Home Assistant",
           "select_scenes": "Selecionar Cenas (Tap-to-Run) que entram no Home Assistant",
           "configure_local": "Configurar Modo Híbrido (Local & Cloud) e IPs Locais",
@@ -52,7 +74,22 @@
         "data": {
           "routing_mode": "Política de Roteamento"
         }
+      },
+      "smartlife": {
+        "title": "Conta Smart Life",
+        "description": "No app Smart Life ou Tuya Smart: Eu → Configurações → Conta e Segurança → User Code. Cole o código abaixo. {msg}",
+        "data": {
+          "account_name": "Nome da Conta (ex.: Casa Principal)",
+          "user_code": "User Code do app"
+        }
+      },
+      "smartlife_scan": {
+        "title": "Escaneie o QR Code",
+        "description": "Abra o app Smart Life/Tuya Smart → ícone de leitura (canto superior direito) → escaneie o código e confirme o login no app. Depois clique em Enviar. {msg}"
       }
+    },
+    "error": {
+      "login_error": "Login Smart Life falhou. Confira o User Code e escaneie o QR novamente."
     }
   },
   "selector": {

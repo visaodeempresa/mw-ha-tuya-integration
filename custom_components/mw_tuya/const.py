@@ -9,6 +9,9 @@ CONF_REGION = "region"
 CONF_CLIENT_ID = "client_id"
 CONF_CLIENT_SECRET = "client_secret"
 CONF_UID = "uid"
+# Sessão Smart Life (login por QR Code, mesmo canal da Tuya nativa)
+CONF_SMARTLIFE = "smartlife"
+CONF_USER_CODE = "user_code"
 
 CONF_SELECTED_DEVICES = "selected_devices"
 CONF_SELECTED_SCENES = "selected_scenes"
