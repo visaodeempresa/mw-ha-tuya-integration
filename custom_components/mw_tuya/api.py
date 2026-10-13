@@ -59,7 +59,8 @@ class TuyaCloudClient:
         self.uid = uid.strip()
         self.signature_builder = SignatureBuilder(client_id=client_id, secret=client_secret)
         self.token_manager = TokenManager()
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # só para obter/renovar token
+        self._qps = asyncio.Semaphore(4)  # chamadas simultâneas à OpenAPI
 
     async def _raw_request(
         self,
@@ -133,6 +134,12 @@ class TuyaCloudClient:
     async def _ensure_token(self) -> str:
         if self.token_manager.is_valid and self.token_manager.access_token:
             return self.token_manager.access_token
+        async with self._lock:
+            if self.token_manager.is_valid and self.token_manager.access_token:
+                return self.token_manager.access_token
+            return await self._fetch_token()
+
+    async def _fetch_token(self) -> str:
         data = await self._raw_request(
             "GET",
             "/v1.0/token",
@@ -151,14 +158,14 @@ class TuyaCloudClient:
         return access_token
 
     async def async_get(self, path: str, query_params: dict[str, str] | None = None) -> Any:
-        async with self._lock:
+        async with self._qps:
             resp = await self._raw_request("GET", path, query_params=query_params)
-            return resp.get("result")
+        return resp.get("result")
 
     async def async_post(self, path: str, body: dict[str, Any] | None = None) -> Any:
-        async with self._lock:
+        async with self._qps:
             resp = await self._raw_request("POST", path, body=body or {})
-            return resp.get("result")
+        return resp.get("result")
 
     # ------------------------------------------------------------------ Catálogo
     async def async_list_raw_devices(self) -> list[dict[str, Any]]:

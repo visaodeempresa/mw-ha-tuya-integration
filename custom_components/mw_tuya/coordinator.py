@@ -7,7 +7,9 @@ colisão de tokens, dispositivos ou cenas.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -39,6 +41,10 @@ from .local import TuyaLocalClient, TuyaLocalError, async_discover_lan_devices
 from .models import MwTuyaDevice, MwTuyaScene
 
 _LOGGER = logging.getLogger(__name__)
+
+LOCAL_POLL_CONCURRENCY = 8
+LOCAL_POLL_TIMEOUT = 4.0
+LOCAL_REPROBE_SECONDS = 300
 
 
 class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -77,6 +83,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.local_clients: dict[str, TuyaLocalClient] = {}
         self.local_ok: dict[str, bool] = {}
         self._local_misses: dict[str, int] = {}
+        self._last_probe: dict[str, float] = {}
 
         # Estatísticas de telemetria híbrida por device_id
         self.stats: dict[str, dict[str, int]] = {}
@@ -203,21 +210,37 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 dev.local_ip = hosts_override[dev.device_id].strip()
             if dev.device_id in versions_override and versions_override[dev.device_id].strip():
                 dev.local_version = versions_override[dev.device_id].strip()
-
-            if dev.device_id in selected_set:
-                cache_key = dev.product_id or dev.device_id
-                specs = models_cache.get(cache_key)
-                if not specs:
-                    specs = await self.client.async_get_thing_model(dev.device_id)
-                    if specs:
-                        models_cache[cache_key] = specs
-                dev.apply_thing_model(specs or {})
-                props = await self.client.async_get_shadow_properties(dev.device_id)
-                if props:
-                    dev.apply_shadow_properties(props)
-
             self.catalog_devices[dev.device_id] = dev
-            if dev.is_local_configured and dev.device_id in selected_set:
+
+        selected_devs = [d for d in devices if d.device_id in selected_set]
+
+        # Thing Model: 1 chamada por produto (cache persistente)
+        for dev in selected_devs:
+            key = dev.product_id or dev.device_id
+            if key not in models_cache:
+                models_cache[key] = {}
+        missing = [
+            next(d for d in selected_devs if (d.product_id or d.device_id) == key)
+            for key, specs in models_cache.items()
+            if not specs and any((d.product_id or d.device_id) == key for d in selected_devs)
+        ]
+        fetched = await asyncio.gather(
+            *(self.client.async_get_thing_model(d.device_id) for d in missing)
+        )
+        for dev, specs in zip(missing, fetched, strict=True):
+            if specs:
+                models_cache[dev.product_id or dev.device_id] = specs
+        models_cache = {k: v for k, v in models_cache.items() if v}
+
+        # Shadow (valores + nomes personalizados dos canais) em paralelo
+        shadows = await asyncio.gather(
+            *(self.client.async_get_shadow_properties(d.device_id) for d in selected_devs)
+        )
+        for dev, props in zip(selected_devs, shadows, strict=True):
+            dev.apply_thing_model(models_cache.get(dev.product_id or dev.device_id) or {})
+            if props:
+                dev.apply_shadow_properties(props)
+            if dev.is_local_configured:
                 self.local_clients[dev.device_id] = TuyaLocalClient(
                     host=dev.local_ip,
                     device_id=dev.device_id,
@@ -287,29 +310,12 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     err,
                 )
 
-        # 2. Para dispositivos selecionados com canal local, consulta DPs locais se necessário
+        # 2. Leitura local em paralelo (limite de conexões e timeout curto por aparelho)
         if routing != ROUTING_CLOUD_ONLY:
-            for did in selected:
-                dev = self.catalog_devices.get(did)
-                local_client = self.local_clients.get(did)
-                if not dev or not local_client:
-                    continue
-                if not self.local_ok.get(did, True):
-                    # Sonda recuperação do canal local
-                    alive = await local_client.async_ping()
-                    self.local_ok[did] = alive
-                    if alive:
-                        self._local_misses[did] = 0
-                if self.local_ok.get(did, False):
-                    try:
-                        dps = await local_client.async_get_dps(node_id=dev.node_id)
-                        if dps:
-                            dev.merge_local_dps(dps)
-                            dev.online = True
-                    except TuyaLocalError:
-                        # Não derruba na primeira falha de leitura; apenas comandos contam misses
-                        pass
-
+            sem = asyncio.Semaphore(LOCAL_POLL_CONCURRENCY)
+            await asyncio.gather(
+                *(self._async_poll_local(did, sem) for did in selected if did in self.local_clients)
+            )
         return {
             "devices": {
                 did: self.catalog_devices[did] for did in selected if did in self.catalog_devices
@@ -320,6 +326,43 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if sid in self.catalog_scenes
             },
         }
+
+    async def _async_poll_local(self, did: str, sem: asyncio.Semaphore) -> None:
+        """Lê os DPs locais de um aparelho; 3 falhas seguidas → só nuvem até a sonda voltar."""
+        dev = self.catalog_devices.get(did)
+        client = self.local_clients.get(did)
+        if not dev or not client:
+            return
+        now = time.monotonic()
+        async with sem:
+            if not self.local_ok.get(did, True):
+                if now - self._last_probe.get(did, 0.0) < LOCAL_REPROBE_SECONDS:
+                    return
+                self._last_probe[did] = now
+                try:
+                    alive = await asyncio.wait_for(client.async_ping(), LOCAL_POLL_TIMEOUT)
+                except (TimeoutError, TuyaLocalError, OSError):
+                    alive = False
+                if not alive:
+                    return
+                self.local_ok[did] = True
+                self._local_misses[did] = 0
+            try:
+                dps = await asyncio.wait_for(
+                    client.async_get_dps(node_id=dev.node_id), LOCAL_POLL_TIMEOUT
+                )
+            except (TimeoutError, TuyaLocalError, OSError):
+                dps = None
+        if dps:
+            dev.merge_local_dps(dps)
+            dev.online = True
+            self._local_misses[did] = 0
+            return
+        misses = self._local_misses.get(did, 0) + 1
+        self._local_misses[did] = misses
+        if misses >= 3:
+            self.local_ok[did] = False
+            self._last_probe[did] = now
 
     # ------------------------------------------------------------------ Roteador Híbrido
     async def async_send_device_command(
