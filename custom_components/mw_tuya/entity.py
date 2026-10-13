@@ -98,4 +98,6 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
             else False,
             "local_hits": stats.get("local_ok", 0),
             "cloud_hits": stats.get("cloud", 0) + stats.get("cloud_fallback", 0),
+            "push_connected": self.coordinator.push_connected,
+            "push_hits": stats.get("push", 0),
         }
