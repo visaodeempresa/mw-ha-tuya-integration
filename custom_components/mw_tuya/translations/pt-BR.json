@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Adicionar Conta Tuya IoT",
+        "description": "Valida as credenciais da conta na Tuya Cloud OpenAPI e coleta todo o inventário (incluindo local_key e cenas). Nenhuma entidade de dispositivo ou cena é criada agora: após adicionar a conta, clique em Configurar na entrada da conta para escolher exatamente quais dispositivos e cenas entram no Home Assistant.",
+        "data": {
+          "account_name": "Nome da Conta (ex.: Casa Principal, Escritório)",
+          "region": "Região do Data Center Tuya",
+          "client_id": "Access ID / Client ID (Tuya IoT Core)",
+          "client_secret": "Access Secret / Client Secret",
+          "uid": "UID do Aplicativo Tuya / Smart Life"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Não foi possível conectar à Tuya Cloud OpenAPI. Verifique a região e a conexão de rede.",
+      "invalid_auth": "Credenciais recusadas pela Tuya Cloud. Confira Access ID, Access Secret e UID."
+    },
+    "abort": {
+      "already_configured": "Esta conta Tuya já está configurada no MW Tuya Integration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Gerenciar Conta Tuya",
+        "menu_options": {
+          "select_devices": "Selecionar Dispositivos que entram no Home Assistant",
+          "select_scenes": "Selecionar Cenas (Tap-to-Run) que entram no Home Assistant",
+          "configure_local": "Configurar Modo Híbrido (Local & Cloud) e IPs Locais",
+          "refresh_catalog": "Atualizar Catálogo, Local Keys e Varredura LAN"
+        }
+      },
+      "select_devices": {
+        "title": "Selecionar Dispositivos ({account})",
+        "description": "Catálogo da conta: {total} dispositivos descobertos ({selected} atualmente ativos no HA). Marque apenas os dispositivos que deseja criar no Home Assistant.",
+        "data": {
+          "selected_devices": "Dispositivos Ativos no Home Assistant"
+        }
+      },
+      "select_scenes": {
+        "title": "Selecionar Cenas ({account})",
+        "description": "Catálogo da conta: {total} cenas descobertas ({selected} atualmente ativas no HA). Marque apenas as cenas que deseja expor no Home Assistant.",
+        "data": {
+          "selected_scenes": "Cenas Ativas no Home Assistant"
+        }
+      },
+      "configure_local": {
+        "title": "Controle Híbrido Local & Cloud",
+        "description": "Defina a política de roteamento e ajuste os endereços IP locais (TCP 6668) dos dispositivos selecionados que possuem local_key.",
+        "data": {
+          "routing_mode": "Política de Roteamento"
+        }
+      }
+    }
+  },
+  "selector": {
+    "region": {
+      "options": {
+        "us": "Western America (us)",
+        "eu": "Central Europe (eu)",
+        "cn": "China (cn)",
+        "in": "India (in)",
+        "sg": "Singapore (sg)",
+        "we": "Eastern America (we)",
+        "ue": "Western Europe (ue)"
+      }
+    },
+    "routing_mode": {
+      "options": {
+        "hybrid_local_first": "Híbrido Inteligente (Prioriza Local TCP 6668 com Fallback Cloud)",
+        "local_only": "Somente Rede Local (TCP 6668 sem usar nuvem)",
+        "cloud_only": "Somente Tuya Cloud OpenAPI"
+      }
+    }
+  }
+}

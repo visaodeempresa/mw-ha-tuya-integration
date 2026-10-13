@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualidade:
+    name: ruff + testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-test.txt
+      - name: ruff
+        run: ruff check custom_components tests scripts
+      - name: testes
+        run: pytest
+
+  hassfest:
+    name: hassfest (validador oficial do HA)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: validação do HACS
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands license
+
+  coerencia:
+    name: o repositório continua coerente?
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: a versão do manifest é a do pyproject
+        run: |
+          M=$(python -c "import json;print(json.load(open('custom_components/mw_tuya/manifest.json'))['version'])")
+          P=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          echo "manifest=$M pyproject=$P"
+          [ "$M" = "$P" ] || { echo "::error::versão fora de sincronia"; exit 1; }
+
+      - name: o manifest está na ordem que o hassfest exige
+        run: |
+          python - <<'PYEOF'
+          import json, pathlib, sys
+          d = json.loads(pathlib.Path(
+              "custom_components/mw_tuya/manifest.json").read_text())
+          chaves = list(d)
+          esperado = ["domain", "name"] + sorted(
+              k for k in d if k not in ("domain", "name"))
+          if chaves != esperado:
+              print(f"::error::manifest fora de ordem.\n  está:    {chaves}\n"
+                    f"  deveria: {esperado}")
+              sys.exit(1)
+          print("manifest na ordem certa ✓")
+          PYEOF
+
+      - name: nenhuma tradução com sinal de menor/maior
+        run: |
+          if grep -rlE '"[^"]*<[a-zA-Z/][^"]*>' \
+               custom_components/mw_tuya/strings.json \
+               custom_components/mw_tuya/translations/; then
+            echo "::error::tradução com sinal de menor/maior — o hassfest lê como HTML"
+            exit 1
+          fi
+          echo "traduções limpas ✓"
+
+      - name: as imagens de marca estão dentro da regra
+        run: |
+          pip install --quiet pillow
+          python - <<'PYEOF'
+          import sys
+          from PIL import Image
+          base = "custom_components/mw_tuya/brand"
+          regras = {
+              "icon.png": ("quadrado", 256),
+              "icon@2x.png": ("quadrado", 512),
+              "logo.png": ("menor", 128, 256),
+              "logo@2x.png": ("menor", 256, 512),
+          }
+          erros = []
+          for nome, regra in regras.items():
+              im = Image.open(f"{base}/{nome}")
+              if im.mode != "RGBA":
+                  erros.append(f"{nome}: modo {im.mode}, esperado RGBA")
+              if regra[0] == "quadrado":
+                  if im.size != (regra[1], regra[1]):
+                      erros.append(f"{nome}: {im.size} != ({regra[1]},{regra[1]})")
+              else:
+                  menor = min(im.size)
+                  if not (regra[1] <= menor <= regra[2]):
+                      erros.append(f"{nome}: menor lado {menor} fora de {regra[1]}..{regra[2]}")
+          for e in erros:
+              print(f"::error::{e}")
+          sys.exit(1 if erros else 0)
+          PYEOF
+          echo "marca dentro da regra ✓"
+
+      - name: nenhum segredo, despejo ou arquivo de IA versionado
+        run: |
+          if git ls-files | grep -iE '^output/|\.env$|^(CLAUDE|GEMINI|AGENTS)\.md$|^\.(claude|cursor|gemini|opencode)/'; then
+            echo "::error::despejo da nuvem, .env ou arquivo de IA versionado — ver .gitignore"
+            exit 1
+          fi
+          if git grep -lIE 'eyJhbGciOi|ghp_[A-Za-z0-9]{20}|[0-9a-f]{32}' \
+               -- . ':!.github' ':!tests' ':!custom_components/mw_tuya/brand' ':!custom_components/mw_tuya/security.py'; then
+            echo "::error::parece token, chave ou secret em arquivo versionado"
+            exit 1
+          fi
+          echo "nada de segredo ou arquivo de IA versionado ✓"

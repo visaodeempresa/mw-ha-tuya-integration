@@ -1,0 +1,78 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Tuya IoT Account",
+        "description": "Validates your Tuya Cloud OpenAPI credentials and fetches the full catalog (including local_key and scenes). No device or scene entities are created yet: after adding the account, click Configure on the account entry to choose which devices and scenes are added to Home Assistant.",
+        "data": {
+          "account_name": "Account Name (e.g. Main Home, Office)",
+          "region": "Tuya Data Center Region",
+          "client_id": "Access ID / Client ID (Tuya IoT Core)",
+          "client_secret": "Access Secret / Client Secret",
+          "uid": "Tuya / Smart Life App UID"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Tuya Cloud OpenAPI. Check region and network connection.",
+      "invalid_auth": "Credentials rejected by Tuya Cloud. Verify Access ID, Access Secret, and UID."
+    },
+    "abort": {
+      "already_configured": "This Tuya account is already configured in MW Tuya Integration."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage Tuya Account",
+        "menu_options": {
+          "select_devices": "Select Devices to include in Home Assistant",
+          "select_scenes": "Select Scenes (Tap-to-Run) to include in Home Assistant",
+          "configure_local": "Configure Hybrid Mode (Local & Cloud) and Local IPs",
+          "refresh_catalog": "Refresh Catalog, Local Keys, and LAN Scan"
+        }
+      },
+      "select_devices": {
+        "title": "Select Devices ({account})",
+        "description": "Account catalog: {total} discovered devices ({selected} currently active in HA). Select only the devices you want to create in Home Assistant.",
+        "data": {
+          "selected_devices": "Active Devices in Home Assistant"
+        }
+      },
+      "select_scenes": {
+        "title": "Select Scenes ({account})",
+        "description": "Account catalog: {total} discovered scenes ({selected} currently active in HA). Select only the scenes you want to expose in Home Assistant.",
+        "data": {
+          "selected_scenes": "Active Scenes in Home Assistant"
+        }
+      },
+      "configure_local": {
+        "title": "Hybrid Local & Cloud Control",
+        "description": "Set the routing policy and adjust local IP addresses (TCP 6668) for selected devices that have a local_key.",
+        "data": {
+          "routing_mode": "Routing Policy"
+        }
+      }
+    }
+  },
+  "selector": {
+    "region": {
+      "options": {
+        "us": "Western America (us)",
+        "eu": "Central Europe (eu)",
+        "cn": "China (cn)",
+        "in": "India (in)",
+        "sg": "Singapore (sg)",
+        "we": "Eastern America (we)",
+        "ue": "Western Europe (ue)"
+      }
+    },
+    "routing_mode": {
+      "options": {
+        "hybrid_local_first": "Smart Hybrid (Prioritize Local TCP 6668 with Cloud Fallback)",
+        "local_only": "Local Network Only (TCP 6668 without Cloud)",
+        "cloud_only": "Tuya Cloud OpenAPI Only"
+      }
+    }
+  }
+}

@@ -1,0 +1,101 @@
+name: auto-release
+
+# Merge em `main` que toque o componente → bump semântico → versão gravada no
+# manifest → tag → Release com o zip que o HACS baixa.
+#
+# O bump lê os assuntos dos commits desde a última tag:
+#   BREAKING / `!:` → major · `feat` → minor · o resto → patch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/**"
+      - "hacs.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: calcular a próxima versão
+        id: v
+        run: |
+          ULTIMA=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "última tag: $ULTIMA"
+          ASSUNTOS=$(git log "$ULTIMA"..HEAD --pretty=%s 2>/dev/null || git log --pretty=%s)
+          MAJOR=$(echo "$ULTIMA" | sed 's/^v//' | cut -d. -f1)
+          MINOR=$(echo "$ULTIMA" | sed 's/^v//' | cut -d. -f2)
+          PATCH=$(echo "$ULTIMA" | sed 's/^v//' | cut -d. -f3)
+          if echo "$ASSUNTOS" | grep -qE '(BREAKING|^[a-z]+(\(.+\))?!:)'; then
+            MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0
+          elif echo "$ASSUNTOS" | grep -qE '^feat(\(.+\))?:'; then
+            MINOR=$((MINOR+1)); PATCH=0
+          else
+            PATCH=$((PATCH+1))
+          fi
+          echo "proxima=v$MAJOR.$MINOR.$PATCH" >> "$GITHUB_OUTPUT"
+          echo "nua=$MAJOR.$MINOR.$PATCH" >> "$GITHUB_OUTPUT"
+
+      - name: gravar a versão no manifest e no pyproject
+        run: |
+          NUA="${{ steps.v.outputs.nua }}"
+          python - "$NUA" <<'PY'
+          import json, re, sys, pathlib
+          nua = sys.argv[1]
+          m = pathlib.Path("custom_components/mw_tuya/manifest.json")
+          d = json.loads(m.read_text())
+          d["version"] = nua
+          m.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+          p = pathlib.Path("pyproject.toml")
+          p.write_text(re.sub(r'^version = ".*"', f'version = "{nua}"',
+                              p.read_text(), count=1, flags=re.M))
+          PY
+          grep -q "\"version\": \"$NUA\"" custom_components/mw_tuya/manifest.json \
+            || { echo "::error::manifest não recebeu a versão $NUA"; exit 1; }
+          grep -q "^version = \"$NUA\"" pyproject.toml \
+            || { echo "::error::pyproject não recebeu a versão $NUA"; exit 1; }
+
+      - name: commitar e marcar
+        run: |
+          git config user.name  "MAYCON WILLIAN OLIVEIRA"
+          git config user.email "visaodeempresa@gmail.com"
+          git add custom_components/mw_tuya/manifest.json pyproject.toml
+          if git diff --cached --quiet; then
+            echo "manifest já estava em ${{ steps.v.outputs.nua }} — só marcando"
+          else
+            git commit -m "chore: 🔖 ${{ steps.v.outputs.proxima }}"
+          fi
+          if git rev-parse -q --verify "refs/tags/${{ steps.v.outputs.proxima }}" >/dev/null; then
+            echo "tag ${{ steps.v.outputs.proxima }} já existe — nada a marcar"
+          else
+            git tag -a "${{ steps.v.outputs.proxima }}" -m "${{ steps.v.outputs.proxima }}"
+          fi
+          git push origin HEAD:main --follow-tags
+          if git push origin HEAD:develop 2>/dev/null; then
+            echo "develop sincronizada com o bump"
+          else
+            echo "::warning::develop não aceitou o avanço direto — " \
+                 "alguém empurrou lá enquanto a release rodava. " \
+                 "Rode: git merge origin/main na develop."
+          fi
+
+      - name: empacotar
+        run: |
+          cd custom_components/mw_tuya
+          zip -r "$GITHUB_WORKSPACE/mw_tuya.zip" . -x "__pycache__/*"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.proxima }}
+          name: ${{ steps.v.outputs.proxima }}
+          generate_release_notes: true
+          files: mw_tuya.zip

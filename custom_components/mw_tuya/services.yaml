@@ -1,0 +1,55 @@
+refresh_catalog:
+  name: Atualizar Catálogo e Local Keys
+  description: Reconsulta todas as contas Tuya configuradas na nuvem e faz varredura UDP LAN para atualizar chaves locais, novos dispositivos e cenas.
+
+scan_lan:
+  name: Escanear Dispositivos na Rede Local (UDP 6666/6667)
+  description: Escuta os pacotes de broadcast UDP dos dispositivos Tuya na LAN e atualiza o mapa de IPs locais de todas as contas.
+
+send_command:
+  name: Enviar Comando Híbrido (Local + Fallback Cloud)
+  description: Envia um comando de datapoint (DP) para qualquer dispositivo de qualquer conta ativa, priorizando TCP 6668 local com fallback automático para a nuvem Tuya.
+  fields:
+    device_id:
+      name: Device ID
+      description: ID do dispositivo na Tuya.
+      required: true
+      example: "eb77229b2a9fafa74ee2pc"
+      selector:
+        text:
+    code:
+      name: Código do DP
+      description: Nome semântico do datapoint (ex. switch_1, bright_value_v2).
+      required: true
+      example: "switch_1"
+      selector:
+        text:
+    value:
+      name: Valor
+      description: Valor a ser gravado no datapoint.
+      required: true
+      example: true
+      selector:
+        object:
+    dp_id:
+      name: ID Numérico do DP Local (Opcional)
+      description: Força o número do DP no protocolo local 3.3/3.4 (ex. 1).
+      required: false
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box
+
+trigger_scene:
+  name: Disparar Cena Tuya Cloud
+  description: Aciona uma cena Tap-to-Run de qualquer conta Tuya configurada.
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Identificador da cena na Tuya Cloud.
+      required: true
+      example: "tys1234567890"
+      selector:
+        text:

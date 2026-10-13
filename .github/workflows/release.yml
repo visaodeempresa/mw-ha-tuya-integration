@@ -1,0 +1,29 @@
+name: release (por tag)
+
+# Reserva do auto-release: `git push` de uma tag `v*` republica o zip.
+# Idempotente — rodar duas vezes na mesma tag não estraga nada.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: a tag bate com o manifest?
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          M=$(python -c "import json;print(json.load(open('custom_components/mw_tuya/manifest.json'))['version'])")
+          [ "$TAG" = "$M" ] || { echo "::error::tag $TAG != manifest $M"; exit 1; }
+      - run: |
+          cd custom_components/mw_tuya
+          zip -r "$GITHUB_WORKSPACE/mw_tuya.zip" . -x "__pycache__/*"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: mw_tuya.zip
+          generate_release_notes: true
