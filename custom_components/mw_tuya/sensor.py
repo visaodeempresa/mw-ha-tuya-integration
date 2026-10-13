@@ -30,7 +30,7 @@ _DEVICE_CLASS_MAP: dict[str, SensorDeviceClass] = {
     "humidity": SensorDeviceClass.HUMIDITY,
     "illuminance": SensorDeviceClass.ILLUMINANCE,
     "pm25": SensorDeviceClass.PM25,
-    "carbon_dioxide": SensorDeviceClass.CARBON_DIOXIDE,
+    "carbon_dioxide": SensorDeviceClass.CO2,
     "volatile_organic_compounds": SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
     "battery": SensorDeviceClass.BATTERY,
     "distance": SensorDeviceClass.DISTANCE,
