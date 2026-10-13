@@ -46,8 +46,8 @@ jobs:
           fi
           pip install -r requirements-test.txt
           python -c "import homeassistant.const as c; print('HA', c.__version__)"
-      - name: importar todas as plataformas
-        run: pytest -q tests/test_ha_imports.py
+      - name: suíte completa contra o HA real (imports, fábrica, migração)
+        run: pytest -q
 
   hassfest:
     name: hassfest (validador oficial do HA)

@@ -53,3 +53,26 @@ trigger_scene:
       example: "tys1234567890"
       selector:
         text:
+
+migrate_legacy:
+  name: Migrar da Tuya nativa / LocalTuya
+  description: >-
+    Faz as entidades da MW Tuya herdarem entity_id, nome, aliases, área e
+    exposição à Letícia/Assist das entidades equivalentes das integrações
+    `tuya` e `localtuya`. As antigas viram `<entity_id>_legacy` desabilitadas
+    (reversível). Rode primeiro com dry_run para ver o plano.
+  fields:
+    dry_run:
+      name: Somente simular
+      description: Mostra o plano sem alterar nada.
+      default: true
+      selector:
+        boolean:
+    select_missing:
+      name: Selecionar aparelhos e cenas faltantes
+      description: >-
+        Adiciona à seleção da MW os aparelhos e cenas que estão em uso na
+        integração antiga. Depois do recarregamento, rode a migração de novo.
+      default: false
+      selector:
+        boolean:

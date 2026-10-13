@@ -9,11 +9,20 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 
 from .const import DOMAIN
 from .coordinator import HomeAssistantError, MwTuyaCoordinator
+from .migration import apply_plan, async_select_missing, build_plan
 
 SERVICE_REFRESH_CATALOG = "refresh_catalog"
 SERVICE_SCAN_LAN = "scan_lan"
 SERVICE_SEND_COMMAND = "send_command"
 SERVICE_TRIGGER_SCENE = "trigger_scene"
+SERVICE_MIGRATE_LEGACY = "migrate_legacy"
+
+SCHEMA_MIGRATE_LEGACY = vol.Schema(
+    {
+        vol.Optional("dry_run", default=True): bool,
+        vol.Optional("select_missing", default=False): bool,
+    }
+)
 
 SCHEMA_SEND_COMMAND = vol.Schema(
     {
@@ -91,6 +100,25 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 }
         raise HomeAssistantError(f"Cena {scene_id} não encontrada em nenhuma conta configurada.")
 
+    async def handle_migrate_legacy(call: ServiceCall) -> dict[str, Any]:
+        coords = _iter_coordinators(hass)
+        plan = build_plan(hass, coords)
+        result: dict[str, Any] = {"plano": plan.as_dict(), "dry_run": call.data["dry_run"]}
+        if call.data["select_missing"] and not call.data["dry_run"]:
+            result["selecionados"] = await async_select_missing(hass, plan)
+        if not call.data["dry_run"]:
+            result["execucao"] = apply_plan(hass, plan)
+            for coord in coords:
+                hass.config_entries.async_schedule_reload(coord.config_entry.entry_id)
+        return result
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MIGRATE_LEGACY,
+        handle_migrate_legacy,
+        schema=SCHEMA_MIGRATE_LEGACY,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     hass.services.async_register(
         DOMAIN,
         SERVICE_REFRESH_CATALOG,
@@ -125,6 +153,7 @@ def async_unload_services(hass: HomeAssistant) -> None:
         SERVICE_SCAN_LAN,
         SERVICE_SEND_COMMAND,
         SERVICE_TRIGGER_SCENE,
+        SERVICE_MIGRATE_LEGACY,
     ):
         if hass.services.has_service(DOMAIN, svc):
             hass.services.async_remove(DOMAIN, svc)
