@@ -6,6 +6,8 @@ leitura periódica só percebe quando o tipo de clique muda.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Any
 
 from homeassistant.components.event import EventDeviceClass, EventEntity
@@ -34,13 +36,13 @@ async def async_setup_entry(
 
 
 class MwTuyaEvent(MwTuyaEntity, EventEntity):
-    """Botão sem fio: dispara `single_click`, `double_click`, `long_press`…"""
-
-    _attr_device_class = EventDeviceClass.BUTTON
+    """Botão sem fio (`single_click`…) ou alerta de câmera (`triggered`)."""
 
     def __init__(self, coordinator, device, spec) -> None:
         super().__init__(coordinator, device, spec)
         self._attr_event_types = list(spec.options)
+        if not spec.extra.get("decode"):
+            self._attr_device_class = EventDeviceClass.BUTTON
         self._last_seen: Any = device.status.get(spec.code)
 
     async def async_added_to_hass(self) -> None:
@@ -57,11 +59,19 @@ class MwTuyaEvent(MwTuyaEntity, EventEntity):
     @callback
     def _fire(self, value: Any) -> None:
         self._last_seen = value
-        if isinstance(value, str) and value:
+        if not isinstance(value, str) or not value:
+            return
+        if self._spec.extra.get("decode") == "base64":
+            try:
+                message = base64.b64decode(value).decode("utf-8", "replace")
+            except (ValueError, binascii.Error):
+                message = value
+            self._trigger_event("triggered", {"message": message})
+        else:
             if value not in self._attr_event_types:
                 self._attr_event_types.append(value)
             self._trigger_event(value)
-            self.async_write_ha_state()
+        self.async_write_ha_state()
 
     @callback
     def _handle_coordinator_update(self) -> None:

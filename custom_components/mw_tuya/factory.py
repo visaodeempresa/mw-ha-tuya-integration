@@ -167,6 +167,19 @@ def _camera(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
         "motion": dev.first("motion_switch"),
     }
     out = [_mk(dev, "camera", "ipc", None, extra=extra)]
+    if dev.has("alarm_message"):
+        # Paridade: a nativa expõe o alerta da câmera como `event` (texto em base64)
+        used.add("alarm_message")
+        out.append(
+            _mk(
+                dev,
+                "event",
+                "alarm_message",
+                "Mensagem da câmera",
+                options=["triggered"],
+                extra={"decode": "base64"},
+            )
+        )
     if dev.has("basic_indicator"):
         # Paridade com a Tuya nativa: LED de status é `light` liga/desliga
         used.add("basic_indicator")

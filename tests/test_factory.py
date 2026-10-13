@@ -225,7 +225,7 @@ WXKG = _model(
 
 
 def test_camera_sp_gera_camera_led_sirene_e_reinicio(models, dpspec):
-    specs = models.infer_entity_specs(_dev(models, dpspec, "sp", SP))
+    specs = models.infer_entity_specs(_dev(models, dpspec, "sp", SP, {"alarm_message": ""}))
     plat = {(s.platform, s.code) for s in specs}
     cam = next(s for s in specs if s.platform == "camera")
     assert cam.extra == {
@@ -236,6 +236,7 @@ def test_camera_sp_gera_camera_led_sirene_e_reinicio(models, dpspec):
     assert ("light", "basic_indicator") in plat
     assert ("siren", "siren_switch") in plat
     assert ("button", "device_restart") in plat
+    assert ("event", "alarm_message") in plat
     assert not any(s.code == "ptz_control" for s in specs)
 
 
