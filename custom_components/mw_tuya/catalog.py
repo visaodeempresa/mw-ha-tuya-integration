@@ -8,6 +8,12 @@ FAN_CATS = {"kj", "fs", "fsd", "fskg"}
 COVER_CATS = {"cl", "clkg", "mc", "ckmkzq"}
 HUMIDIFIER_CATS = {"jsq", "cs"}
 CLIMATE_CATS = {"kt", "wk", "qn", "rs"}
+CAMERA_CATS = {"sp"}
+VACUUM_CATS = {"sd"}
+# DPs que viram `siren`
+SIREN_CODES = {"siren_switch", "alarm_switch"}
+# Botões sem fio: `switch_mode1`/`switch1_value` viram `event` (push em tempo real)
+EVENT_CATS = {"wxkg"}
 # IR/virtuais: controlados pela integração MW Infrared — aqui não geram entidades
 SKIP_CATS = {
     "infrared_ac",
@@ -121,6 +127,8 @@ BUTTON_CODES = {
     "edge_brush_life_reset",
     "reset_edge_brush",
     "restart",
+    "device_restart",
+    "ptz_calibration",
     "seek",
     "device_find",
 }

@@ -194,3 +194,61 @@ def test_merge_local_decodifica_cor_e_lembra_formato(models, dpspec):
 def test_resolve_dp_nunca_chuta_quando_ha_modelo(models, dpspec):
     dev = _dev(models, dpspec, "dj", DJ)
     assert dev.resolve_dp_id("cur_voltage") is None
+
+
+SP = _model(
+    [
+        (101, "basic_indicator", "rw", {"type": "bool"}),
+        (105, "basic_private", "rw", {"type": "bool"}),
+        (134, "motion_switch", "rw", {"type": "bool"}),
+        (150, "record_switch", "rw", {"type": "bool"}),
+        (159, "siren_switch", "rw", {"type": "bool"}),
+        (162, "device_restart", "rw", {"type": "bool"}),
+        (119, "ptz_control", "rw", {"type": "enum", "range": ["0", "1", "2"]}),
+    ]
+)
+SD = _model(
+    [
+        (1, "power_go", "rw", {"type": "bool"}),
+        (3, "mode", "rw", {"type": "enum", "range": ["standby", "smart", "chargego"]}),
+        (5, "status", "ro", {"type": "enum", "range": ["standby", "smart_clean", "charging"]}),
+        (13, "seek", "rw", {"type": "bool"}),
+        (6, "electricity_left", "ro", {"type": V, "min": 0, "max": 100, "scale": 0, "step": 1}),
+    ]
+)
+WXKG = _model(
+    [
+        (1, "switch_mode1", "ro", {"type": "enum", "range": ["click", "double_click", "press"]}),
+        (10, "battery_percentage", "ro", {"type": V, "min": 0, "max": 100, "scale": 0, "step": 1}),
+    ]
+)
+
+
+def test_camera_sp_gera_camera_led_sirene_e_reinicio(models, dpspec):
+    specs = models.infer_entity_specs(_dev(models, dpspec, "sp", SP))
+    plat = {(s.platform, s.code) for s in specs}
+    cam = next(s for s in specs if s.platform == "camera")
+    assert cam.extra == {
+        "private": "basic_private",
+        "record": "record_switch",
+        "motion": "motion_switch",
+    }
+    assert ("light", "basic_indicator") in plat
+    assert ("siren", "siren_switch") in plat
+    assert ("button", "device_restart") in plat
+    assert not any(s.code == "ptz_control" for s in specs)
+
+
+def test_aspirador_sd_vira_vacuum(models, dpspec):
+    specs = models.infer_entity_specs(_dev(models, dpspec, "sd", SD))
+    vac = next(s for s in specs if s.platform == "vacuum")
+    assert vac.code == "power_go"
+    assert vac.extra["mode"] == "mode" and vac.extra["seek"] == "seek"
+    assert not any(s.platform == "button" and s.code == "seek" for s in specs)
+
+
+def test_botao_sem_fio_vira_event_com_tipos_do_modelo(models, dpspec):
+    specs = models.infer_entity_specs(_dev(models, dpspec, "wxkg", WXKG))
+    ev = next(s for s in specs if s.platform == "event")
+    assert ev.code == "switch_mode1"
+    assert ev.options == ["click", "double_click", "press"]

@@ -14,15 +14,19 @@ from typing import Any
 from .catalog import (
     BINARY_CLASSES,
     BUTTON_CODES,
+    CAMERA_CATS,
     CLIMATE_CATS,
     COVER_CATS,
     ENUM_SENSOR_ENABLED,
+    EVENT_CATS,
     FAN_CATS,
     HUMIDIFIER_CATS,
     LIGHT_CATS,
     SENSOR_CLASSES,
+    SIREN_CODES,
     SKIP_CATS,
     SKIP_CODES,
+    VACUUM_CATS,
     label_for,
 )
 from .dpspec import DpSpec
@@ -154,6 +158,74 @@ def _climate(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
     }
     used.update(c for c in extra.values() if c)
     return [_mk(dev, "climate", sw, None, extra=extra)]
+
+
+def _camera(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
+    extra = {
+        "private": dev.first("basic_private"),
+        "record": dev.first("record_switch"),
+        "motion": dev.first("motion_switch"),
+    }
+    out = [_mk(dev, "camera", "ipc", None, extra=extra)]
+    if dev.has("basic_indicator"):
+        # Paridade com a Tuya nativa: LED de status é `light` liga/desliga
+        used.add("basic_indicator")
+        out.append(
+            _mk(
+                dev,
+                "light",
+                "basic_indicator",
+                label_for("basic_indicator", dev.custom_names),
+                extra={"switch": "basic_indicator"},
+                entity_category="config",
+            )
+        )
+    return out
+
+
+def _vacuum(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
+    power = dev.first("power_go", "switch_go", "power")
+    if not power:
+        return []
+    extra = {
+        "power": power,
+        "mode": dev.first("mode"),
+        "status": dev.first("status"),
+        "seek": dev.first("seek"),
+        "charge": dev.first("switch_charge"),
+        "pause": dev.first("pause"),
+        "suction": dev.first("suction"),
+    }
+    used.update(c for c in extra.values() if c)
+    return [_mk(dev, "vacuum", power, None, extra=extra)]
+
+
+def _sirens(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
+    out = []
+    for code in _all_codes(dev):
+        if code in SIREN_CODES and code not in used and _type_of(dev, code) == "bool":
+            used.add(code)
+            out.append(_mk(dev, "siren", code, label_for(code, dev.custom_names)))
+    return out
+
+
+def _is_event_code(code: str) -> bool:
+    if code.startswith("switch_mode") and code[11:].isdigit():
+        return True
+    return code.startswith("switch") and code.endswith("_value") and code[6:-6].isdigit()
+
+
+def _events(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
+    codes = [c for c in _all_codes(dev) if _is_event_code(c) and c not in used]
+    out = []
+    for code in sorted(codes):
+        spec = dev.spec(code)
+        opts = list(spec.range) if spec and spec.range else ["click", "double_click", "press"]
+        used.add(code)
+        num = "".join(ch for ch in code if ch.isdigit())
+        name = dev.custom_names.get(code) or (f"Botão {num}" if len(codes) > 1 else "Botão")
+        out.append(_mk(dev, "event", code, name, options=opts))
+    return out
 
 
 def _switches(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
@@ -288,6 +360,13 @@ def build_entity_specs(dev: MwTuyaDevice) -> list[EntitySpec]:
         specs += _humidifier(dev, used)
     if cat in CLIMATE_CATS:
         specs += _climate(dev, used)
+    if cat in CAMERA_CATS:
+        specs += _camera(dev, used)
+    if cat in VACUUM_CATS:
+        specs += _vacuum(dev, used)
+    if cat in EVENT_CATS:
+        specs += _events(dev, used)
+    specs += _sirens(dev, used)
     specs += _switches(dev, used)
 
     for code in _all_codes(dev):
