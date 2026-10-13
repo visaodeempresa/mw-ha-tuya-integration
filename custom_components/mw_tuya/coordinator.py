@@ -10,11 +10,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -39,6 +40,7 @@ from .const import (
 from .dpspec import DpSpec, encode_local
 from .local import TuyaLocalClient, TuyaLocalError, async_discover_lan_devices
 from .models import MwTuyaDevice, MwTuyaScene
+from .push import TuyaPushHub, get_hub, status_from_event
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -87,6 +89,48 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Estatísticas de telemetria híbrida por device_id
         self.stats: dict[str, dict[str, int]] = {}
+
+        # Push em tempo real (Message Service) e ouvintes por device_id
+        self._push_hub: TuyaPushHub | None = None
+        self._push_listeners: dict[str, set[Callable[[dict[str, Any]], None]]] = {}
+
+    # ------------------------------------------------------------------ Push
+    @property
+    def push_connected(self) -> bool:
+        return bool(self._push_hub and self._push_hub.connected)
+
+    @callback
+    def async_add_push_listener(
+        self, device_id: str, listener: Callable[[dict[str, Any]], None]
+    ) -> Callable[[], None]:
+        self._push_listeners.setdefault(device_id, set()).add(listener)
+
+        def _remove() -> None:
+            self._push_listeners.get(device_id, set()).discard(listener)
+
+        return _remove
+
+    @callback
+    def async_start_push(
+        self, session: Any, base_url: str, access_id: str, secret: str
+    ) -> Callable[[], None]:
+        self._push_hub = get_hub(session, base_url, access_id, secret)
+        return self._push_hub.add_listener(self._on_push_event)
+
+    @callback
+    def _on_push_event(self, event: dict[str, Any]) -> None:
+        did, status, online = status_from_event(event)
+        dev = self.catalog_devices.get(did)
+        if dev is None or did not in set(self.selected_device_ids):
+            return
+        if status:
+            dev.merge_cloud_status([{"code": c, "value": v} for c, v in status.items()])
+        if online is not None:
+            dev.online = online
+        self._record_stat(did, "push")
+        for listener in list(self._push_listeners.get(did, ())):
+            listener(status)
+        self.async_set_updated_data(self.data or {})
 
     # ------------------------------------------------------------------ Opções
     @property
