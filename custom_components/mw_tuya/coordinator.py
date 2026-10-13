@@ -139,12 +139,41 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if sid in self.catalog_scenes
         ]
 
+    def _harvest_existing_ha_hosts(self) -> dict[str, dict[str, str]]:
+        """Importa IPs e versões de entradas `localtuya` ou `mw_infrared` no HA."""
+        harvested: dict[str, dict[str, str]] = {}
+        try:
+            for lt_entry in self.hass.config_entries.async_entries("localtuya"):
+                devs = lt_entry.data.get("devices") or {}
+                if isinstance(devs, dict):
+                    for did, d in devs.items():
+                        if isinstance(d, dict) and d.get("host"):
+                            harvested[str(did)] = {
+                                "ip": str(d["host"]).strip(),
+                                "version": str(d.get("protocol_version") or "3.3").strip(),
+                            }
+            for ir_entry in self.hass.config_entries.async_entries("mw_infrared"):
+                hosts = (
+                    ir_entry.options.get("local_hosts") or ir_entry.data.get("local_hosts") or {}
+                )
+                if isinstance(hosts, dict):
+                    for did, ip in hosts.items():
+                        if ip:
+                            harvested[str(did)] = {"ip": str(ip).strip(), "version": "3.3"}
+        except Exception as err:
+            _LOGGER.debug("Falha ao importar hosts de outras integrações: %s", err)
+        return harvested
+
     # ------------------------------------------------------------------ Catálogo
     async def async_load_catalog(self, scan_lan: bool = True) -> None:
-        """Carrega o catálogo da nuvem + cache local + varredura UDP LAN."""
+        """Carrega o catálogo da nuvem + cache local + varredura UDP LAN + Shadow v2.0."""
         cached = await self._store.async_load() or {}
         if isinstance(cached.get("lan_map"), dict):
             self.lan_map.update(cached["lan_map"])
+
+        harvested = self._harvest_existing_ha_hosts()
+        for did, info in harvested.items():
+            self.lan_map.setdefault(did, info)
 
         if scan_lan:
             try:
@@ -159,6 +188,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         hosts_override = self.configured_local_hosts
         versions_override = self.configured_local_versions
+        selected_set = set(self.selected_device_ids)
 
         self.catalog_devices.clear()
         self.local_clients.clear()
@@ -169,8 +199,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if dev.device_id in versions_override and versions_override[dev.device_id].strip():
                 dev.local_version = versions_override[dev.device_id].strip()
 
+            if dev.device_id in selected_set:
+                props = await self.client.async_get_shadow_properties(dev.device_id)
+                if props:
+                    dev.apply_shadow_properties(props)
+
             self.catalog_devices[dev.device_id] = dev
-            if dev.is_local_configured and dev.device_id in self.selected_device_ids:
+            if dev.is_local_configured and dev.device_id in selected_set:
                 self.local_clients[dev.device_id] = TuyaLocalClient(
                     host=dev.local_ip,
                     device_id=dev.device_id,

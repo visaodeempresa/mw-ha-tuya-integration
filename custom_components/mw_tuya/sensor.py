@@ -33,6 +33,7 @@ _DEVICE_CLASS_MAP: dict[str, SensorDeviceClass] = {
     "carbon_dioxide": SensorDeviceClass.CARBON_DIOXIDE,
     "volatile_organic_compounds": SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
     "battery": SensorDeviceClass.BATTERY,
+    "distance": SensorDeviceClass.DISTANCE,
 }
 
 _STATE_CLASS_MAP: dict[str, SensorStateClass] = {
@@ -60,7 +61,7 @@ class MwTuyaAccountStatusSensor(CoordinatorEntity[MwTuyaCoordinator], SensorEnti
 
     _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_icon = "mdi:cloud-check-Variant"
+    _attr_icon = "mdi:cloud-check-variant"
 
     def __init__(self, coordinator: MwTuyaCoordinator) -> None:
         super().__init__(coordinator)

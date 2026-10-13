@@ -237,6 +237,16 @@ class TuyaCloudClient:
         scenes.sort(key=lambda s: s.name.lower())
         return scenes
 
+    async def async_get_shadow_properties(self, device_id: str) -> list[dict[str, Any]]:
+        """Obtém o mapa de propriedades (`code`, `dp_id`, `value`) do Shadow v2.0."""
+        try:
+            res = await self.async_get(f"/v2.0/cloud/thing/{device_id}/shadow/properties")
+            if isinstance(res, dict) and isinstance(res.get("properties"), list):
+                return res["properties"]
+        except TuyaApiError as err:
+            _LOGGER.debug("Shadow properties indisponível para %s: %s", device_id, err)
+        return []
+
     # ------------------------------------------------------------------ Comandos
     async def async_send_commands(self, device_id: str, commands: list[dict[str, Any]]) -> bool:
         """Envia comandos para um dispositivo pela nuvem Tuya."""

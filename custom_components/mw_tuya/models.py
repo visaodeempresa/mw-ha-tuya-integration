@@ -14,6 +14,7 @@ from .const import (
     CLOUD_ONLY_CATEGORIES,
     CODE_TO_DEFAULT_DP,
     COVER_DP_TO_CODE,
+    DEFAULT_LOCAL_HOSTS,
     LIGHT_DP_TO_CODE,
     PLUG_DP_TO_CODE,
 )
@@ -94,6 +95,8 @@ class MwTuyaDevice:
     icon: str = ""
     status: dict[str, Any] = field(default_factory=dict)
     raw_dps: dict[int, Any] = field(default_factory=dict)
+    dp_map: dict[str, int] = field(default_factory=dict)
+    custom_names: dict[str, str] = field(default_factory=dict)
 
     @property
     def category_label(self) -> str:
@@ -122,6 +125,27 @@ class MwTuyaDevice:
             return "Cloud (Local Key pronta · aguardando IP LAN)"
         return "Cloud Only"
 
+    def apply_shadow_properties(self, properties: list[dict[str, Any]]) -> None:
+        """Aplica as propriedades do Shadow v2.0 (`code`, `dp_id`, `value`, `custom_name`)."""
+        for prop in properties or []:
+            if not isinstance(prop, dict):
+                continue
+            code = str(prop.get("code") or "")
+            if not code:
+                continue
+            dp_id = prop.get("dp_id")
+            if isinstance(dp_id, int):
+                self.dp_map[code] = dp_id
+            if "value" in prop and prop["value"] is not None:
+                self.status[code] = prop["value"]
+            cname = str(prop.get("custom_name") or "").strip()
+            if cname:
+                self.custom_names[code] = cname
+            if code == "onvif_ip_addr" and not self.local_ip:
+                ip_val = str(prop.get("value") or "").strip()
+                if ip_val.startswith("192.168.") or ip_val.startswith("10."):
+                    self.local_ip = ip_val
+
     def merge_cloud_status(self, status_list: list[dict[str, Any]] | dict[str, Any]) -> None:
         if isinstance(status_list, dict):
             self.status.update(status_list)
@@ -147,13 +171,14 @@ class MwTuyaDevice:
                 self.status[code] = val
 
     def _dp_to_code_map(self) -> dict[int, str]:
+        if self.dp_map:
+            return {dp_id: code for code, dp_id in self.dp_map.items()}
         if self.category in ("cz", "pc", "tdq", "kg"):
             return dict(PLUG_DP_TO_CODE)
         if self.category in ("dj", "dd", "xdd"):
             return dict(LIGHT_DP_TO_CODE)
         if self.category in ("cl", "mc"):
             return dict(COVER_DP_TO_CODE)
-        # Fallback genérico inverso
         inv: dict[int, str] = {}
         for code, dp_id in CODE_TO_DEFAULT_DP.items():
             if code in self.status:
@@ -162,6 +187,8 @@ class MwTuyaDevice:
 
     def resolve_dp_id(self, code: str) -> int | None:
         """Resolve o ID numérico do DP local correspondente a um `code` da Tuya."""
+        if code in self.dp_map:
+            return self.dp_map[code]
         if code.isdigit():
             return int(code)
         dp_map = self._dp_to_code_map()
@@ -190,6 +217,7 @@ class MwTuyaDevice:
             "uid": self.uid,
             "icon": self.icon,
             "status": self.status,
+            "dp_map": self.dp_map,
         }
 
     @classmethod
@@ -203,10 +231,15 @@ class MwTuyaDevice:
         elif isinstance(raw_status, dict):
             status_dict = dict(raw_status)
 
+        dev_id = str(raw.get("id") or raw.get("device_id") or "")
         lan = lan_info or {}
+        default_ip, default_ver = DEFAULT_LOCAL_HOSTS.get(dev_id, ("", "3.3"))
+        local_ip = str(lan.get("ip") or raw.get("local_ip") or default_ip or "")
+        local_version = str(lan.get("version") or raw.get("local_version") or default_ver or "3.3")
+
         return cls(
-            device_id=str(raw.get("id") or raw.get("device_id") or ""),
-            name=str(raw.get("name") or raw.get("id") or "").strip(),
+            device_id=dev_id,
+            name=str(raw.get("name") or dev_id).strip(),
             category=str(raw.get("category") or ""),
             product_id=str(raw.get("product_id") or ""),
             product_name=str(raw.get("product_name") or ""),
@@ -214,8 +247,8 @@ class MwTuyaDevice:
             uuid=str(raw.get("uuid") or ""),
             online=bool(raw.get("online", False)),
             ip_wan=str(raw.get("ip") or ""),
-            local_ip=str(lan.get("ip") or raw.get("local_ip") or ""),
-            local_version=str(lan.get("version") or raw.get("local_version") or "3.3"),
+            local_ip=local_ip,
+            local_version=local_version,
             local_key=str(raw.get("local_key") or ""),
             sub=bool(raw.get("sub", False)),
             node_id=str(raw.get("node_id") or ""),
@@ -232,24 +265,31 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
     status = device.status
     cat = device.category
 
-    # 1. Switches booleanos (tomadas, réguas, interruptores, LEDs auxiliares, travas)
+    # 1. Switches principais (tomadas, réguas, interruptores)
     switch_codes = [
         k
         for k in sorted(status.keys())
         if (k == "switch" or k.startswith("switch_"))
-        and k != "switch_led"
+        and k not in ("switch_led", "switch_spray", "switch_inching")
         and isinstance(status.get(k), bool)
     ]
-    if not switch_codes and cat in ("cz", "pc", "tdq", "kg"):
-        # Se o dispositivo tem switch_1 implicito
+    if not switch_codes and cat in ("cz", "pc", "tdq", "kg", "dlq"):
         switch_codes = ["switch_1"]
+
+    # Em purificador/umidificador/climatizador, `switch` pertence à plataforma principal
+    if cat in ("kj", "fs", "jsq", "kt", "wk") and "switch" in switch_codes:
+        switch_codes.remove("switch")
 
     multi_switch = len(switch_codes) > 1
     for code in switch_codes:
-        suffix = code.removeprefix("switch_").upper() if code != "switch" else ""
-        label = f"Tomada {suffix}" if (multi_switch and suffix) else "Tomada"
-        if cat in ("kg", "tdq"):
-            label = f"Interruptor {suffix}" if (multi_switch and suffix) else "Interruptor"
+        custom = device.custom_names.get(code)
+        if custom:
+            label = custom
+        else:
+            suffix = code.removeprefix("switch_").upper() if code != "switch" else ""
+            label = f"Tomada {suffix}" if (multi_switch and suffix) else "Tomada"
+            if cat in ("kg", "tdq", "dlq"):
+                label = f"Interruptor {suffix}" if (multi_switch and suffix) else "Interruptor"
         specs.append(
             EntitySpec(
                 platform="switch",
@@ -259,14 +299,30 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
             )
         )
 
-    for lock_code in ("child_lock", "Child_Lock"):
-        if lock_code in status and isinstance(status[lock_code], bool):
+    # Switches de configuração / recursos extras (câmeras, purificadores, umidificadores, presença)
+    aux_switches: list[tuple[str, str]] = [
+        ("child_lock", "Trava Infantil"),
+        ("Child_Lock", "Trava Infantil"),
+        ("lock", "Trava Infantil"),
+        ("basic_indicator", "LED Indicador"),
+        ("indicator", "LED Indicador"),
+        ("basic_private", "Modo Privacidade"),
+        ("basic_osd", "Marca d'Água de Horário"),
+        ("basic_flip", "Inverter Imagem"),
+        ("motion_switch", "Alarme de Movimento"),
+        ("record_switch", "Gravação em Cartão SD"),
+        ("siren_switch", "Sirene"),
+        ("sleep", "Modo Noturno"),
+        ("mute", "Silenciar"),
+    ]
+    for aux_code, aux_label in aux_switches:
+        if aux_code in status and isinstance(status[aux_code], bool):
             specs.append(
                 EntitySpec(
                     platform="switch",
-                    code=lock_code,
-                    name="Trava Infantil",
-                    dp_id=device.resolve_dp_id(lock_code),
+                    code=aux_code,
+                    name=aux_label,
+                    dp_id=device.resolve_dp_id(aux_code),
                     entity_category="config",
                 )
             )
@@ -290,20 +346,20 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
             EntitySpec(
                 platform="cover",
                 code=cover_code,
-                name="Cortina" if cat == "cl" else " Abertura",
+                name="Cortina" if cat == "cl" else "Abertura",
                 dp_id=device.resolve_dp_id(cover_code),
                 device_class="curtain" if cat == "cl" else "window",
             )
         )
 
-    # 4. Purificadores de Ar e Ventiladores (kj, fs, fan)
+    # 4. Purificadores de Ar e Ventiladores (kj, fs)
     if cat in ("kj", "fs") and ("switch" in status or "fan_speed_enum" in status):
         specs.append(
             EntitySpec(
                 platform="fan",
                 code="switch",
                 name="Purificador de Ar" if cat == "kj" else "Ventilador",
-                dp_id=1,
+                dp_id=device.resolve_dp_id("switch") or 1,
             )
         )
 
@@ -326,11 +382,90 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
                 platform="climate",
                 code="switch",
                 name="Climatização",
-                dp_id=1,
+                dp_id=device.resolve_dp_id("switch") or 1,
             )
         )
 
-    # 7. Sensores de Energia, Ambiente e Bateria
+    # 7. Selects (Estado do Relé, Modo do LED, Modo de Gravação, Nível de Névoa)
+    select_defs: list[tuple[str, str, list[str]]] = [
+        (
+            "relay_status",
+            "Estado Pós-Queda",
+            ["off", "on", "memory", "power_off", "power_on", "last"],
+        ),
+        ("light_mode", "Modo do LED Indicador", ["relay", "pos", "none", "off", "on"]),
+        ("record_mode", "Modo de Gravação", ["1", "2"]),
+        ("level", "Nível de Névoa", ["level_1", "level_2", "level_3"]),
+        ("countdown_set", "Timer Programado", ["cancel", "1h", "2h", "3h", "4h", "5h", "6h"]),
+    ]
+    for sel_code, sel_label, default_opts in select_defs:
+        if sel_code in status and isinstance(status[sel_code], str):
+            cur_val = str(status[sel_code])
+            opts = list(default_opts)
+            if cur_val and cur_val not in opts:
+                opts.append(cur_val)
+            specs.append(
+                EntitySpec(
+                    platform="select",
+                    code=sel_code,
+                    name=sel_label,
+                    dp_id=device.resolve_dp_id(sel_code),
+                    options=opts,
+                    entity_category="config",
+                )
+            )
+
+    # 8. Numbers (Timers / Countdowns e Sensibilidade de Presença mmWave)
+    number_defs: list[tuple[str, str, str | None, float, float, float]] = [
+        ("countdown_1", "Timer Canal 1", "s", 0.0, 86400.0, 60.0),
+        ("countdown_2", "Timer Canal 2", "s", 0.0, 86400.0, 60.0),
+        ("countdown_3", "Timer Canal 3", "s", 0.0, 86400.0, 60.0),
+        ("countdown_4", "Timer Canal 4", "s", 0.0, 86400.0, 60.0),
+        ("countdown_5", "Timer Canal 5", "s", 0.0, 86400.0, 60.0),
+        ("countdown_6", "Timer Canal 6", "s", 0.0, 86400.0, 60.0),
+        ("countdown", "Timer", "s", 0.0, 86400.0, 60.0),
+        ("far_detection", "Distância Máxima Detecção", "cm", 0.0, 1000.0, 15.0),
+        ("near_detection", "Distância Mínima Detecção", "cm", 0.0, 1000.0, 15.0),
+        ("presence_time", "Tempo de Retenção", "s", 0.0, 3600.0, 1.0),
+        ("no_one_time", "Atraso Sem Presença", "s", 0.0, 3600.0, 1.0),
+        ("motion_sensitivity_value", "Sensibilidade em Movimento", None, 0.0, 10.0, 1.0),
+        ("motionless_sensitivity", "Sensibilidade Estático", None, 0.0, 10.0, 1.0),
+    ]
+    for num_code, num_label, unit, min_v, max_v, step_v in number_defs:
+        if num_code in status and isinstance(status[num_code], (int, float)):
+            specs.append(
+                EntitySpec(
+                    platform="number",
+                    code=num_code,
+                    name=num_label,
+                    dp_id=device.resolve_dp_id(num_code),
+                    unit=unit,
+                    min_value=min_v,
+                    max_value=max_v,
+                    step=step_v,
+                    entity_category="config",
+                )
+            )
+
+    # 9. Buttons (Reset de Filtro / Medidor)
+    button_defs: list[tuple[str, str]] = [
+        ("filter_reset", "Resetar Filtro"),
+        ("reset_add_ele", "Zerar Medidor de Energia"),
+        ("restart", "Reiniciar Dispositivo"),
+    ]
+    for btn_code, btn_label in button_defs:
+        if btn_code in status:
+            specs.append(
+                EntitySpec(
+                    platform="button",
+                    code=btn_code,
+                    name=btn_label,
+                    dp_id=device.resolve_dp_id(btn_code),
+                    entity_category="config",
+                )
+            )
+
+    # 10. Sensores de Energia, Ambiente e Bateria
     sensor_defs: list[tuple[str, str, str | None, str | None, float, str | None]] = [
         ("cur_current", "Corrente", "current", "mA", 1.0, "measurement"),
         ("cur_power", "Potência", "power", "W", 0.1, "measurement"),
@@ -342,6 +477,8 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
         ("humidity_value", "Umidade", "humidity", "%", 1.0, "measurement"),
         ("humidity_current", "Umidade Atual", "humidity", "%", 1.0, "measurement"),
         ("bright_value", "Luminosidade", "illuminance", "lx", 1.0, "measurement"),
+        ("illuminance_value", "Luminosidade", "illuminance", "lx", 1.0, "measurement"),
+        ("dis_current", "Distância Alvo", "distance", "cm", 1.0, "measurement"),
         ("pm25_value", "PM2.5", "pm25", "µg/m³", 1.0, "measurement"),
         ("co2_value", "CO₂", "carbon_dioxide", "ppm", 1.0, "measurement"),
         ("voc_value", "TVOC", "volatile_organic_compounds", "µg/m³", 1.0, "measurement"),
@@ -349,13 +486,12 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
         ("battery_percentage", "Bateria", "battery", "%", 1.0, "measurement"),
         ("va_battery", "Bateria", "battery", "%", 1.0, "measurement"),
         ("filter_life", "Vida Útil do Filtro", None, "%", 1.0, "measurement"),
+        ("filter_days", "Dias Restantes do Filtro", None, "d", 1.0, "measurement"),
     ]
     for code, label, dclass, unit, scale, sclass in sensor_defs:
-        # Evita confundir bright_value de lâmpada com sensor de iluminância
         if code == "bright_value" and cat in ("dj", "dd", "xdd"):
             continue
         if code in status and isinstance(status[code], (int, float)):
-            # Se temperatura vier em décimos (> 100 em ambiente doméstico), ajusta escala
             actual_scale = scale
             if dclass == "temperature" and scale == 1.0 and float(status[code]) > 100:
                 actual_scale = 0.1
@@ -372,7 +508,7 @@ def infer_entity_specs(device: MwTuyaDevice) -> list[EntitySpec]:
                 )
             )
 
-    # 8. Binary Sensors (Presença, Movimento, Porta/Janela, SOS, Vibração)
+    # 11. Binary Sensors (Presença, Movimento, Porta/Janela, SOS, Vibração)
     binary_defs: list[tuple[str, str, str, Any]] = [
         ("doorcontact_state", "Contato", "door", True),
         ("pir", "Movimento", "motion", "pir"),
