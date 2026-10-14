@@ -3,9 +3,40 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
-## [Não lançado]
+## [0.3.0] — 2026-10-14
 
-## [0.1.0] — 2026-10-13
+### Adicionado
+
+- **Substituição Definitiva da Tuya Nativa e LocalTuya**:
+  - Serviço `mw_tuya.migrate_legacy` com plano e execução atômica de troca de `entity_id`, nome, ícone, área e exposição à assistente Letícia (`should_expose: true`).
+  - Herança dos identificadores canônicos sem quebra de automações, scripts ou dashboards.
+  - Renomeação segura de entidades legadas para `<entity_id>_legacy` e desabilitação preventiva (100% reversível).
+  - 0 pendências no painel de reparos do Home Assistant (`/config/repairs`).
+- **Canal Smart Life por QR Code**:
+  - Autenticação por leitura de QR Code direto no app Smart Life (mesmo mecanismo oficial da Tuya nativa).
+  - Push MQTT em tempo real (`mq_connected`) sem limites de cota ou necessidade de conta developer OpenAPI.
+  - Extração automatizada de `local_key` para operação Local-First (TCP 6668).
+- **Thing Model v2.0**:
+  - Geração dinâmica de entidades dirigida pela especificação dos DPs no catálogo da Tuya.
+  - Resolução de conformidade para sensores TVOC (`volatile_organic_compounds_parts` em `ppm`), evitando conflitos de unidade no recorder.
+- **Novas Plataformas**:
+  - Adicionado suporte a `camera`, `siren`, `vacuum`, `event` e botões de reinício de dispositivo.
+
+## [0.2.1] — 2026-10-13
+
+### Corrigido
+
+- Correção no parsing de plataformas com `_` no unique ID da migração (`binary_sensor`).
+- Otimização do catálogo e leitura paralela na inicialização do coordenador.
+
+## [0.2.0] — 2026-10-13
+
+### Adicionado
+
+- Suporte ao serviço de push (Message Service) em tempo real e telemetria por entidade.
+- Thing Model dinâmico para controle preciso de luzes, ventiladores e seletores.
+
+
 
 ### Adicionado
 

@@ -18,24 +18,37 @@ A integração nativa Tuya do Home Assistant e o LocalTuya tradicional apresenta
 
 ## Como Funciona o Fluxo de Uso
 
-### Etapa 1 — Adicionar uma Conta Tuya IoT
+### Etapa 1 — Adicionar uma Conta Tuya / Smart Life
 1. Vá em **Configurações → Dispositivos e Serviços → Adicionar Integração → MW Tuya Integration**.
-2. Informe:
-   - **Nome da Conta** (ex.: `Casa Principal`, `Escritório`)
-   - **Região do Data Center** (`us`, `eu`, `cn`, `in`, `sg`, `we`, `ue`)
-   - **Access ID / Client ID** (do projeto na Tuya IoT Platform)
-   - **Access Secret / Client Secret**
-   - **UID** do aplicativo Tuya / Smart Life
-3. A integração valida a conta, extrai e armazena todas as `local_key`, descobre os IPs na LAN via broadcast UDP (`6666`/`6667`) e cataloga todas as cenas *Tap-to-Run* das casas vinculadas.
+2. Escolha o método de conexão:
+   - **Smart Life (QR Code)** *(Recomendado)*: Escaneie o QR Code diretamente no app Smart Life (idêntico à integração Tuya nativa). Sem limites de cota, com push MQTT instantâneo e extração automática de `local_key`.
+   - **Tuya Cloud OpenAPI (Credenciais)**: Informe Nome da Conta, Região (`us`, `eu`, etc.), Client ID, Client Secret e UID do projeto Tuya IoT Platform.
 
 ### Etapa 2 — Selecionar Dispositivos, Cenas e Modo Híbrido
 Na tela da integração **MW Tuya Integration**, clique em **Configurar** ao lado da conta desejada:
 - **Selecionar Dispositivos que entram no Home Assistant**: Lista completa com nome, categoria e indicador `[Local+Cloud (IP)]` ou `[Cloud]`. Apenas os marcados são criados no HA (desmarcar remove imediatamente do *Device Registry*).
-- **Selecionar Cenas (Tap-to-Run) que entram no Home Assistant**: Marque apenas as cenas que deseja expor como entidades `scene.*`.
+- **Selecionar Cenas (Tap-to-Run) que entram no Home Assistant**: Marque apenas as cenas que deseja expor como entidades `scene.*` (podendo deixar todas desmarcadas/desabilitadas para manter a lista limpa).
 - **Configurar Modo Híbrido (Local & Cloud) e IPs Locais**: Escolha entre `hybrid_local_first` (padrão), `local_only` ou `cloud_only` e ajuste IPs locais se desejar.
 - **Atualizar Catálogo, Local Keys e Varredura LAN**: Reconsulta a nuvem e o broadcast UDP sem precisar recriar a conta.
 
 ---
+
+## Migração Segura da Tuya Nativa e LocalTuya
+
+A integração possui um serviço de migração atômica embutido (`mw_tuya.migrate_legacy`):
+- Transfere os `entity_id` canônicos, nomes amigáveis, ícones, áreas e exposição à assistente de voz (Letícia / Assist) da Tuya nativa e LocalTuya diretamente para as entidades da MW Tuya.
+- Renomeia as entidades antigas para `<entity_id>_legacy` e as desabilita com segurança (100% reversível).
+- Garante continuidade transparente de automações, scripts e dashboards Lovelace.
+
+```yaml
+action: mw_tuya.migrate_legacy
+data:
+  dry_run: false
+  select_missing: true
+```
+
+---
+
 
 ## Instalação via HACS e Esteira DevOps
 
