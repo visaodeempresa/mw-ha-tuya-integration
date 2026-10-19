@@ -229,9 +229,10 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 devs = lt_entry.data.get("devices") or {}
                 if isinstance(devs, dict):
                     for did, d in devs.items():
-                        if isinstance(d, dict) and d.get("host"):
+                        ip = str(d.get("host") or "").strip() if isinstance(d, dict) else ""
+                        if ip:
                             harvested[str(did)] = {
-                                "ip": str(d["host"]).strip(),
+                                "ip": ip,
                                 "version": str(d.get("protocol_version") or "3.3").strip(),
                             }
             for ir_entry in self.hass.config_entries.async_entries("mw_infrared"):
@@ -240,8 +241,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 if isinstance(hosts, dict):
                     for did, ip in hosts.items():
-                        if ip:
-                            harvested[str(did)] = {"ip": str(ip).strip(), "version": "3.3"}
+                        ip_str = str(ip or "").strip()
+                        if ip_str:
+                            harvested[str(did)] = {"ip": ip_str, "version": "3.3"}
         except Exception as err:
             _LOGGER.debug("Falha ao importar hosts de outras integrações: %s", err)
         return harvested
@@ -289,42 +291,49 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.sl_scenes.clear()
         if self.smartlife is not None:
             sl = self.smartlife
-            await self.hass.async_add_executor_job(sl.load, selected_set)
-            by_id = {d.device_id: d for d in devices}
-            for did, sdev in sl.devices.items():
-                raw = raw_from_device(sdev)
-                if did in by_id:
-                    dev = by_id[did]
-                    dev.online = raw["online"]
-                    if raw["local_key"]:
-                        dev.local_key = raw["local_key"]
-                    dev.merge_cloud_status(raw["status"])
-                else:
-                    dev = MwTuyaDevice.from_api(raw, self.lan_map.get(did))
-                    devices.append(dev)
-                    by_id[did] = dev
-                self.sl_devices.add(did)
-                if did in selected_set:
-                    sl_specs[did] = specs_from_device(sdev)
-            homes = sl.homes()
-            sl_scene_list = await self.hass.async_add_executor_job(sl.scenes)
-            known = {s.scene_id for s in scenes}
-            for item in sl_scene_list:
-                sid = str(getattr(item, "scene_id", "") or "")
-                if not sid:
-                    continue
-                self.sl_scenes.add(sid)
-                if sid in known:
-                    continue
-                home_id = str(getattr(item, "home_id", "") or "")
-                scenes.append(
-                    MwTuyaScene(
-                        scene_id=sid,
-                        name=str(getattr(item, "name", "") or sid).strip(),
-                        home_id=home_id,
-                        home_name=homes.get(home_id, ""),
-                        enabled=bool(getattr(item, "enabled", True)),
+            try:
+                await self.hass.async_add_executor_job(sl.load, selected_set)
+                by_id = {d.device_id: d for d in devices}
+                for did, sdev in sl.devices.items():
+                    raw = raw_from_device(sdev)
+                    if did in by_id:
+                        dev = by_id[did]
+                        dev.online = raw["online"]
+                        if raw["local_key"]:
+                            dev.local_key = raw["local_key"]
+                        dev.merge_cloud_status(raw["status"])
+                    else:
+                        dev = MwTuyaDevice.from_api(raw, self.lan_map.get(did))
+                        devices.append(dev)
+                        by_id[did] = dev
+                    self.sl_devices.add(did)
+                    if did in selected_set:
+                        sl_specs[did] = specs_from_device(sdev)
+                homes = sl.homes()
+                sl_scene_list = await self.hass.async_add_executor_job(sl.scenes)
+                known = {s.scene_id for s in scenes}
+                for item in sl_scene_list:
+                    sid = str(getattr(item, "scene_id", "") or "")
+                    if not sid:
+                        continue
+                    self.sl_scenes.add(sid)
+                    if sid in known:
+                        continue
+                    home_id = str(getattr(item, "home_id", "") or "")
+                    scenes.append(
+                        MwTuyaScene(
+                            scene_id=sid,
+                            name=str(getattr(item, "name", "") or sid).strip(),
+                            home_id=home_id,
+                            home_name=homes.get(home_id, ""),
+                            enabled=bool(getattr(item, "enabled", True)),
+                        )
                     )
+            except Exception as err:
+                _LOGGER.warning(
+                    "MW Tuya [%s]: falha parcial no catálogo Smart Life: %s",
+                    self.account_name,
+                    err,
                 )
             devices.sort(key=lambda d: d.name.lower())
             scenes.sort(key=lambda s: s.name.lower())
@@ -433,7 +442,8 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     seen.update(changed)
 
         # 1. Atualiza estado da nuvem em 1 única chamada por conta (econômico em QPS)
-        needs_openapi = bool(selected - self.sl_devices)
+        sl_mqtt_alive = bool(self.smartlife is not None and self.smartlife.mq_connected)
+        needs_openapi = bool(selected - self.sl_devices) or not sl_mqtt_alive
         if routing != ROUTING_LOCAL_ONLY and self.client is not None and needs_openapi:
             try:
                 raw_devices = await self.client.async_list_raw_devices()
@@ -601,9 +611,12 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 await self.hass.async_add_executor_job(self.smartlife.send, device_id, payload)
             except SmartLifeError as err:
-                raise HomeAssistantError(
-                    f"Smart Life recusou o comando para {dev.name}: {err}"
-                ) from err
+                if self.client is not None:
+                    await self.client.async_send_commands(device_id, payload)
+                else:
+                    raise HomeAssistantError(
+                        f"Smart Life recusou o comando para {dev.name}: {err}"
+                    ) from err
         elif self.client is not None:
             await self.client.async_send_commands(device_id, payload)
         else:
@@ -620,18 +633,30 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not scene:
             raise HomeAssistantError(f"Cena {scene_id} não encontrada na conta {self.account_name}")
         if self.smartlife is not None and scene_id in self.sl_scenes:
-            await self.hass.async_add_executor_job(
-                self.smartlife.trigger_scene, scene.home_id, scene.scene_id
-            )
-            return True
+            try:
+                await self.hass.async_add_executor_job(
+                    self.smartlife.trigger_scene, scene.home_id, scene.scene_id
+                )
+                return True
+            except Exception:
+                if self.client is not None:
+                    return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
+                raise
         if self.client is None:
             raise HomeAssistantError(f"Cena {scene.name} sem rota de nuvem disponível")
         return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
 
     async def async_stream_url(self, device_id: str) -> str | None:
         """URL RTSP da câmera: Smart Life (sem assinatura extra) ou OpenAPI."""
-        if self.smartlife is not None and device_id in self.sl_devices:
-            return await self.hass.async_add_executor_job(self.smartlife.stream_url, device_id)
+        if self.smartlife is not None:
+            try:
+                url = await self.hass.async_add_executor_job(
+                    self.smartlife.stream_url, device_id, "rtsp"
+                )
+                if url:
+                    return url
+            except Exception as err:
+                _LOGGER.debug("Smart Life stream_url falhou para %s: %s", device_id, err)
         if self.client is None:
             return None
         res = await self.client.async_post(

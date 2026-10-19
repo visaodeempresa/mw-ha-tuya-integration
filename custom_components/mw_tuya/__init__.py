@@ -83,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     if smartlife is not None:
         await coordinator.async_start_smartlife_push()
-    elif client is not None:
+    if client is not None and not coordinator.push_connected:
         entry.async_on_unload(
             coordinator.async_start_push(
                 session, base_url, data[CONF_CLIENT_ID], data[CONF_CLIENT_SECRET]
@@ -94,10 +94,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+def _load_smartlife_from_storage(hass: HomeAssistant, entry_id: str) -> dict | None:
+    """Carrega credenciais smartlife de .storage/core.config_entries caso injetadas em disco."""
+    import json
+    from pathlib import Path
+
+    try:
+        storage_path = Path(hass.config.path(".storage", "core.config_entries"))
+        if not storage_path.exists():
+            return None
+        raw = json.loads(storage_path.read_text(encoding="utf-8"))
+        for item in raw.get("data", {}).get("entries", []):
+            if item.get("entry_id") == entry_id:
+                sl = (item.get("data") or {}).get(CONF_SMARTLIFE)
+                if isinstance(sl, dict) and sl.get("token_info"):
+                    return sl
+    except Exception as err:
+        _LOGGER.debug("Não foi possível ler smartlife do storage em disco: %s", err)
+    return None
+
+
 async def _async_smartlife_session(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> SmartLifeSession | None:
     sl_data = entry.data.get(CONF_SMARTLIFE)
+    if not sl_data:
+        sl_data = await hass.async_add_executor_job(
+            _load_smartlife_from_storage, hass, entry.entry_id
+        )
+        if sl_data:
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_SMARTLIFE: sl_data}
+            )
     if not sl_data:
         return None
 
@@ -105,7 +133,8 @@ async def _async_smartlife_session(
         @callback
         def _save() -> None:
             current = dict(entry.data.get(CONF_SMARTLIFE) or {})
-            current["token_info"] = token_info
+            merged_token = {**dict(current.get("token_info") or {}), **token_info}
+            current["token_info"] = merged_token
             hass.config_entries.async_update_entry(
                 entry, data={**entry.data, CONF_SMARTLIFE: current}
             )

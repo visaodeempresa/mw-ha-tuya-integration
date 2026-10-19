@@ -59,7 +59,7 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
             return False
         if dev.is_local_configured and self.coordinator.local_ok.get(self._device_id, False):
             return True
-        return bool(dev.online)
+        return bool(dev.online or dev.status)
 
     @property
     def dp_value(self) -> Any:
@@ -91,6 +91,7 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
             "dp_code": self._spec.code,
             "dp_id": self._spec.dp_id,
             "connection_mode": self.coordinator.routing_mode,
+            "cloud_online": dev.online,
             "local_configured": dev.is_local_configured,
             "local_ip": dev.local_ip or None,
             "local_online": self.coordinator.local_ok.get(self._device_id, False)

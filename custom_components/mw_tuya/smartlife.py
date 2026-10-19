@@ -138,7 +138,11 @@ class _TokenListener(SharingTokenListener):
 
     def update_token(self, token_info: dict[str, Any]) -> None:
         self._on_token(
-            {k: token_info[k] for k in ("t", "uid", "expire_time", "access_token", "refresh_token")}
+            {
+                k: token_info[k]
+                for k in ("t", "uid", "expire_time", "access_token", "refresh_token")
+                if k in token_info
+            }
         )
 
 
