@@ -3,6 +3,22 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.3.1] — 2026-10-20
+
+### Corrigido
+
+- **Resolução de Aliases v1/v2 em Lâmpadas e Fitas LED**:
+  - Mapeamento bidirecional `DP_ALIASES` entre especificações do Thing Model (`bright_value`, `temp_value`, `colour_data`, `scene_data`, `countdown`) e os códigos de plataforma (`bright_value_v2`, `temp_value_v2`, etc.).
+  - Correção no `resolve_dp_id()` para identificar o ID numérico do DP local (ex.: DP 22 para brilho, DP 23 para temperatura, DP 24 para cor), prevenindo que comandos de brilho/temperatura/cor sofram desvio indevido para a nuvem Tuya.
+  - Mitigação definitiva do erro `[60001001] Your controllable device pool quota is insufficient` da Tuya OpenAPI, mantendo 100% dos comandos de lâmpadas na rota local TCP 6668 com resposta instantânea.
+  - Sincronização em tempo real de `dev.status` e `local_hex_len` entre códigos principais e seus respectivos aliases após pacotes locais TCP 6668.
+  - Fallback de nuvem em `coordinator.py` adaptado para mapear dinamicamente os códigos v2 para o código registrado no Thing Model antes de despachar chamadas OpenAPI.
+
+### Adicionado
+
+- **Câmeras IP com RTSP Local LAN e tmpfs**:
+  - Auto-healing de ONVIF via TCP 6668 local nas 6 câmeras IP Tuya, permitindo streaming RTSP direto na rede local com cache em tmpfs RAM sem consumo de disco.
+
 ## [0.3.0] — 2026-10-14
 
 ### Adicionado
