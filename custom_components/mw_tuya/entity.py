@@ -8,7 +8,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, DP_ALIASES
 from .coordinator import MwTuyaCoordinator
 from .models import EntitySpec, MwTuyaDevice
 
@@ -72,7 +72,14 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
         dev = self.device_obj
         if dev is None or not code:
             return None
-        return dev.status.get(code)
+        val = dev.status.get(code)
+        if val is not None:
+            return val
+        for alias in DP_ALIASES.get(code, ()):
+            val = dev.status.get(alias)
+            if val is not None:
+                return val
+        return None
 
     async def send(self, commands: dict[str, Any]) -> None:
         """Envia vários DPs de uma vez (um único frame local quando possível)."""

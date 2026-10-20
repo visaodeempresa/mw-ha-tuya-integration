@@ -11,8 +11,10 @@ from typing import Any
 from .const import (
     CATEGORY_LABELS,
     CLOUD_ONLY_CATEGORIES,
+    CODE_TO_DEFAULT_DP,
     COVER_DP_TO_CODE,
     DEFAULT_LOCAL_HOSTS,
+    DP_ALIASES,
     LIGHT_DP_TO_CODE,
     PLUG_DP_TO_CODE,
 )
@@ -132,11 +134,21 @@ class MwTuyaDevice:
 
     # ------------------------------------------------------------------ specs
     def spec(self, code: str) -> DpSpec | None:
-        return self.specs.get(code)
+        if code in self.specs:
+            return self.specs[code]
+        for alias in DP_ALIASES.get(code, ()):
+            if alias in self.specs:
+                return self.specs[alias]
+        return None
 
     def has(self, code: str) -> bool:
         """O DP existe no aparelho (pelo Thing Model ou pelo status observado)."""
-        return code in self.specs or code in self.status
+        if code in self.specs or code in self.status:
+            return True
+        for alias in DP_ALIASES.get(code, ()):
+            if alias in self.specs or alias in self.status:
+                return True
+        return False
 
     def first(self, *codes: str) -> str | None:
         for code in codes:
@@ -152,6 +164,8 @@ class MwTuyaDevice:
         for code, spec in specs.items():
             if spec.dp_id is not None:
                 self.dp_map[code] = spec.dp_id
+                for alias in DP_ALIASES.get(code, ()):
+                    self.dp_map.setdefault(alias, spec.dp_id)
 
     def apply_shadow_properties(self, properties: list[dict[str, Any]]) -> None:
         """Aplica as propriedades do Shadow v2.0 (`code`, `dp_id`, `value`, `custom_name`)."""
@@ -198,8 +212,14 @@ class MwTuyaDevice:
             if not code:
                 continue
             if is_colour_code(code) and isinstance(val, str) and not val.startswith("{"):
-                self.local_hex_len[code] = len(val.strip())
-            self.status[code] = decode_local(code, val)
+                hex_len = len(val.strip())
+                self.local_hex_len[code] = hex_len
+                for alias in DP_ALIASES.get(code, ()):
+                    self.local_hex_len[alias] = hex_len
+            decoded = decode_local(code, val)
+            self.status[code] = decoded
+            for alias in DP_ALIASES.get(code, ()):
+                self.status[alias] = decoded
 
     def _dp_to_code_map(self) -> dict[int, str]:
         if self.dp_map:
@@ -216,11 +236,19 @@ class MwTuyaDevice:
         """Resolve o ID numérico do DP local; `None` força a rota Cloud (nunca chuta)."""
         if code in self.dp_map:
             return self.dp_map[code]
+        for alias in DP_ALIASES.get(code, ()):
+            if alias in self.dp_map:
+                return self.dp_map[alias]
         if self.specs:
             return None
         for dp_id, mapped_code in self._dp_to_code_map().items():
-            if mapped_code == code:
+            if mapped_code == code or mapped_code in DP_ALIASES.get(code, ()):
                 return dp_id
+        if code in CODE_TO_DEFAULT_DP:
+            return CODE_TO_DEFAULT_DP[code]
+        for alias in DP_ALIASES.get(code, ()):
+            if alias in CODE_TO_DEFAULT_DP:
+                return CODE_TO_DEFAULT_DP[alias]
         return None
 
     # ------------------------------------------------------------------ serialização

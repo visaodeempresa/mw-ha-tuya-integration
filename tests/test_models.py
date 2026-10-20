@@ -121,3 +121,41 @@ def test_sem_thing_model_nao_cria_controle_por_palpite(models):
     assert by_code["switch_1"].platform == "switch"
     assert by_code["relay_status"].platform == "sensor"
     assert by_code["countdown_1"].platform == "sensor"
+
+
+def test_aliases_v1_v2_luz_thing_model(models):
+    """Garante resolução de DPs v1/v2 em lâmpadas mesmo quando Thing Model usa v1."""
+    dev = models.MwTuyaDevice(
+        device_id="eb9ed27d957425eeccwoin",
+        name="BIBLIOTECH",
+        category="dj",
+        local_key="0123456789abcdef",
+        local_ip="192.168.2.63",
+    )
+    spec = models.DpSpec
+    dev.apply_thing_model(
+        {
+            "switch_led": spec("switch_led", 20, "rw", "bool"),
+            "work_mode": spec("work_mode", 21, "rw", "enum", range=["white", "colour"]),
+            "bright_value": spec("bright_value", 22, "rw", "value", min=10, max=1000),
+            "temp_value": spec("temp_value", 23, "rw", "value", min=0, max=1000),
+            "colour_data": spec("colour_data", 24, "rw", "string"),
+        }
+    )
+    # Verifica resolução bidirecional de aliases em dp_map e specs
+    assert dev.resolve_dp_id("bright_value") == 22
+    assert dev.resolve_dp_id("bright_value_v2") == 22
+    assert dev.resolve_dp_id("temp_value") == 23
+    assert dev.resolve_dp_id("temp_value_v2") == 23
+    assert dev.resolve_dp_id("colour_data") == 24
+    assert dev.resolve_dp_id("colour_data_v2") == 24
+
+    assert dev.spec("bright_value_v2") is not None
+    assert dev.spec("bright_value_v2").max == 1000
+    assert dev.has("bright_value_v2")
+
+    # Local merge sincroniza status em ambos os nomes
+    dev.merge_local_dps({"22": 750})
+    assert dev.status["bright_value"] == 750
+    assert dev.status["bright_value_v2"] == 750
+

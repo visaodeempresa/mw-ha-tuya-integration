@@ -89,6 +89,23 @@ CATEGORY_LABELS: dict[str, str] = {
     "qt": "Dispositivo Customizado",
 }
 
+# Aliases semânticos de datapoints Tuya (paridade entre v1, v2 e convenções de plataforma)
+DP_ALIASES: dict[str, tuple[str, ...]] = {
+    "bright_value": ("bright_value_v2",),
+    "bright_value_v2": ("bright_value",),
+    "temp_value": ("temp_value_v2",),
+    "temp_value_v2": ("temp_value",),
+    "colour_data": ("colour_data_v2",),
+    "colour_data_v2": ("colour_data",),
+    "scene_data": ("scene_data_v2",),
+    "scene_data_v2": ("scene_data",),
+    "countdown": ("countdown_1",),
+    "countdown_1": ("countdown",),
+    "switch_led": ("switch", "switch_1"),
+    "switch": ("switch_1", "switch_led"),
+    "switch_1": ("switch", "switch_led"),
+}
+
 # Mapeamento padrão entre códigos semânticos da Tuya Cloud e IDs de DP locais (fallback)
 CODE_TO_DEFAULT_DP: dict[str, int] = {
     "switch": 1,
@@ -100,6 +117,7 @@ CODE_TO_DEFAULT_DP: dict[str, int] = {
     "switch_6": 6,
     "switch_usb1": 7,
     "switch_usb2": 8,
+    "countdown": 26,
     "countdown_1": 9,
     "countdown_2": 10,
     "countdown_3": 11,
@@ -111,6 +129,10 @@ CODE_TO_DEFAULT_DP: dict[str, int] = {
     "bright_value_v2": 22,
     "temp_value": 23,
     "temp_value_v2": 23,
+    "colour_data": 24,
+    "colour_data_v2": 24,
+    "scene_data": 25,
+    "scene_data_v2": 25,
     "work_mode": 21,
     "cur_current": 18,
     "cur_power": 19,
@@ -171,6 +193,8 @@ LIGHT_DP_TO_CODE: dict[int, str] = {
     21: "work_mode",
     22: "bright_value_v2",
     23: "temp_value_v2",
+    24: "colour_data_v2",
+    25: "scene_data_v2",
     26: "countdown",
 }
 

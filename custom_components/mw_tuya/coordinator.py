@@ -31,6 +31,7 @@ from .const import (
     CONF_UID,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    DP_ALIASES,
     ROUTING_CLOUD_ONLY,
     ROUTING_HYBRID_LOCAL_FIRST,
     ROUTING_LOCAL_ONLY,
@@ -581,6 +582,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._record_stat(device_id, "local_ok")
                     self._local_misses[device_id] = 0
                     dev.status.update(commands)
+                    for c, v in commands.items():
+                        for alias in DP_ALIASES.get(c, ()):
+                            dev.status[alias] = v
                     self.async_set_updated_data(self.data or {})
                     return "local"
             except TuyaLocalError as err:
@@ -606,7 +610,16 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Dispositivo {dev.name} está em modo local_only mas não possui rota local ativa."
             )
 
-        payload = [{"code": c, "value": v} for c, v in commands.items()]
+        payload = []
+        for c, v in commands.items():
+            target_code = c
+            if dev.specs and c not in dev.specs:
+                for alias in DP_ALIASES.get(c, ()):
+                    if alias in dev.specs:
+                        target_code = alias
+                        break
+            payload.append({"code": target_code, "value": v})
+
         if self.smartlife is not None and device_id in self.sl_devices:
             try:
                 await self.hass.async_add_executor_job(self.smartlife.send, device_id, payload)
@@ -624,6 +637,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         route = "cloud_fallback" if can_try_local else "cloud"
         self._record_stat(device_id, route)
         dev.status.update(commands)
+        for c, v in commands.items():
+            for alias in DP_ALIASES.get(c, ()):
+                dev.status[alias] = v
         self.async_set_updated_data(self.data or {})
         return route
 
