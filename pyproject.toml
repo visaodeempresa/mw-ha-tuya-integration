@@ -1,6 +1,6 @@
 [project]
 name = "mw-ha-tuya-integration"
-version = "0.4.3"
+version = "0.4.4"
 description = "MW Tuya Integration — integração híbrida Local & Cloud multi-conta com seleção granular de dispositivos e cenas para o Home Assistant"
 requires-python = ">=3.12"
 

@@ -120,3 +120,23 @@ def test_restauro_do_cache_do_canal_smartlife_cruza_restart(cw):
     assert c.sl_devices == {"ebf3214e780d8936935b7j"}
     c._restore_sl_cache({})
     assert c.sl_scenes == {"scene-1"}
+
+
+def test_coordinator_ignora_auth_error_da_nuvem_em_modo_hibrido(cw, dev):
+    api = importlib.import_module("mwtuya.api")
+
+    class ClientComAuthError:
+        async def async_list_raw_devices(self):
+            raise api.TuyaAuthError("token invalid", path="/v1.0/devices")
+
+    c = _coordinator(cw, dev, client=ClientComAuthError())
+    c.selected_device_ids = [dev.device_id]
+    c.catalog_devices[dev.device_id] = dev
+    c.catalog_scenes = {}
+    c.selected_scene_ids = []
+
+    # Em hybrid_local_first não deve levantar UpdateFailed
+    data = asyncio.run(c._async_update_data())
+    assert dev.device_id in data["devices"]
+    assert data["devices"][dev.device_id].name == dev.name
+

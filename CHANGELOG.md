@@ -3,6 +3,22 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.4.4] — 2026-10-22
+
+### Adicionado / Corrigido
+
+- **Independência Total da Tuya Cloud & Resiliência Offline**:
+  - `async_setup_entry` e `async_load_catalog` agora operam de forma autônoma a partir do catálogo persistido em cache (`.storage/mw_tuya_catalog_*`), não bloqueando a inicialização do Home Assistant caso a nuvem Tuya apresente erro de autenticação, cota esgotada (`60001001`), bloqueio ou ausência total de internet.
+  - O polling em `_async_update_data()` ignora falhas de autenticação (`TuyaAuthError`) em modo híbrido/local, preservando as entidades locais e mantendo o poller local ativo.
+- **Roteamento Local First Prioritário com Chaveamento Transparente**:
+  - Toda operação de controle prioritariamente tenta envio direto via socket efêmero TCP 6668 na LAN.
+  - Se a rota local falhar, chaveia de forma transparente para nuvem; se a nuvem também falhar ou recusar por cota, tenta recuperação imediata via rota local direta.
+  - Transições de canal tratadas como eventos operacionais em nível `DEBUG`, eliminando ruído e IO desnecessário em logs.
+- **Topologia de Rede Sub-rede 2 (192.168.2.x via wlan0 192.168.2.70)**:
+  - Mapeamento definitivo e auto-provisionamento de IPs reservados DHCP em `DEFAULT_LOCAL_HOSTS` para todas as luzes e bocais do apartamento.
+  - Correção de import de `DEFAULT_LOCAL_HOSTS` no coordenador prevenindo `NameError`.
+  - Auto-recuperação de protocolo local (versões 3.3, 3.4 e 3.5 com fallback automático).
+
 ## [0.4.1] — 2026-10-21
 
 ### Corrigido

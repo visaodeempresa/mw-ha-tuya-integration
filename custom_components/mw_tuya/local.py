@@ -513,7 +513,7 @@ class TuyaLocalDevice:
                         await writer.wait_closed()
 
     async def async_get_dps(self, node_id: str = "") -> dict[str, Any] | None:
-        """Consulta os DPs atuais do dispositivo via `DP_QUERY` (0x0A / 0x10) com auto-recuperação."""
+        """Consulta os DPs atuais via `DP_QUERY` com auto-recuperação de versão."""
         if len(self._real_key) != 16:
             return None
         orig_ver = self.version

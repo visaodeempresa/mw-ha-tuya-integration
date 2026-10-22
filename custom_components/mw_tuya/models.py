@@ -113,11 +113,9 @@ class MwTuyaDevice:
     def has_valid_local_key(self) -> bool:
         if not self.local_key or len(self.local_key) < 16:
             return False
-        # Máscaras da Tuya Cloud utilizam strings compostas majoritariamente por asteriscos (ex: "****************").
-        # Chaves aleatórias válidas geradas pela Tuya frequentemente contêm '*', o que é perfeitamente legítimo.
-        if self.local_key.count("*") >= 8 or set(self.local_key) == {"*"}:
-            return False
-        return True
+        # Máscaras da Tuya usam strings com asteriscos (ex: "****************").
+        # Chaves válidas geradas pela Tuya podem conter '*', o que é legítimo.
+        return not (self.local_key.count("*") >= 8 or set(self.local_key) == {"*"})
 
     @property
     def supports_local(self) -> bool:
@@ -239,7 +237,7 @@ class MwTuyaDevice:
         return {}
 
     def resolve_dp_id(self, code: str) -> int | None:
-        """Resolve o ID numérico do DP local; busca em dp_map, aliases, mapa por categoria e defaults."""
+        """Resolve o ID do DP local em dp_map, aliases, mapa por categoria e defaults."""
         if code in self.dp_map:
             return self.dp_map[code]
         for alias in DP_ALIASES.get(code, ()):

@@ -67,14 +67,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = MwTuyaCoordinator(hass, entry, client, smartlife)
     try:
         await coordinator.async_load_catalog(scan_lan=True)
-    except TuyaAuthError as err:
-        raise ConfigEntryAuthFailed(str(err)) from err
-    except TuyaApiError as err:
-        raise ConfigEntryNotReady(f"Tuya Cloud indisponível: {err}") from err
+    except (TuyaAuthError, TuyaApiError) as err:
+        if not coordinator.catalog_devices:
+            raise ConfigEntryNotReady(f"Tuya Cloud indisponível: {err}") from err
+        _LOGGER.warning(
+            "MW Tuya [%s]: nuvem indisponível na inicialização (%s), usando cache local",
+            coordinator.account_name,
+            err,
+        )
     except Exception as err:
-        if smartlife is None:
-            raise
-        raise ConfigEntryNotReady(f"Smart Life indisponível: {err}") from err
+        if not coordinator.catalog_devices:
+            if smartlife is None:
+                raise
+            raise ConfigEntryNotReady(f"Falha ao iniciar MW Tuya: {err}") from err
+        _LOGGER.warning(
+            "MW Tuya [%s]: erro ao atualizar catálogo (%s), usando cache local",
+            coordinator.account_name,
+            err,
+        )
 
     await coordinator.async_config_entry_first_refresh()
 

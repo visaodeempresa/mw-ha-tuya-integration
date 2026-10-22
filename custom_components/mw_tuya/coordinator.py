@@ -30,6 +30,7 @@ from .const import (
     CONF_SELECTED_DEVICES,
     CONF_SELECTED_SCENES,
     CONF_UID,
+    DEFAULT_LOCAL_HOSTS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     DP_ALIASES,
@@ -279,6 +280,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for did, info in harvested.items():
             self.lan_map.setdefault(did, info)
 
+        for did, (def_ip, def_ver) in DEFAULT_LOCAL_HOSTS.items():
+            self.lan_map.setdefault(did, {"ip": def_ip, "version": def_ver})
+
         if scan_lan:
             try:
                 discovered = await async_discover_lan_devices(timeout=2.0)
@@ -294,11 +298,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             try:
                 devices = await self.client.async_list_devices(self.lan_map)
                 scenes = await self.client.async_list_scenes()
-            except TuyaApiError:
-                if self.smartlife is None:
+            except (TuyaApiError, TuyaAuthError) as err:
+                if self.smartlife is None and not cached.get("devices"):
                     raise
                 _LOGGER.warning(
-                    "MW Tuya [%s]: OpenAPI indisponível, usando Smart Life", self.account_name
+                    "MW Tuya [%s]: OpenAPI indisponível (%s), utilizando catálogo local em cache",
+                    self.account_name,
+                    err,
                 )
 
         # Canal Smart Life: aparelhos, status, local_key, specs e cenas
@@ -362,7 +368,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             for did, raw_d in cached["devices"].items():
                 devices.append(MwTuyaDevice.from_api(raw_d, self.lan_map.get(did)))
             _LOGGER.info(
-                "MW Tuya [%s]: nuvem indisponível, restaurados %d dispositivos do cache persistente",
+                "MW Tuya [%s]: nuvem indisponível, %d dispositivos recuperados do cache",
                 self.account_name,
                 len(devices),
             )
@@ -396,19 +402,37 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if not specs and any((d.product_id or d.device_id) == key for d in selected_devs)
         ]
         if self.client is not None and missing:
-            fetched = await asyncio.gather(
-                *(self.client.async_get_thing_model(d.device_id) for d in missing)
-            )
-            for dev, specs in zip(missing, fetched, strict=True):
-                if specs:
-                    models_cache[dev.product_id or dev.device_id] = specs
+            try:
+                fetched = await asyncio.gather(
+                    *(self.client.async_get_thing_model(d.device_id) for d in missing),
+                    return_exceptions=True,
+                )
+                for dev, specs in zip(missing, fetched, strict=True):
+                    if isinstance(specs, dict) and specs:
+                        models_cache[dev.product_id or dev.device_id] = specs
+            except Exception as err:
+                _LOGGER.debug(
+                    "MW Tuya [%s]: Thing Model OpenAPI indisponível (%s)",
+                    self.account_name,
+                    err,
+                )
         models_cache = {k: v for k, v in models_cache.items() if v}
 
         # Shadow (valores + nomes personalizados dos canais) em paralelo
         if self.client is not None:
-            shadows = await asyncio.gather(
-                *(self.client.async_get_shadow_properties(d.device_id) for d in selected_devs)
-            )
+            try:
+                raw_shadows = await asyncio.gather(
+                    *(self.client.async_get_shadow_properties(d.device_id) for d in selected_devs),
+                    return_exceptions=True,
+                )
+                shadows = [s if isinstance(s, list) else [] for s in raw_shadows]
+            except Exception as err:
+                _LOGGER.debug(
+                    "MW Tuya [%s]: Shadow OpenAPI indisponível (%s)",
+                    self.account_name,
+                    err,
+                )
+                shadows = [[] for _ in selected_devs]
         else:
             shadows = [[] for _ in selected_devs]
         for dev, props in zip(selected_devs, shadows, strict=True):
@@ -496,9 +520,15 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             raw, self.lan_map.get(did)
                         )
             except TuyaAuthError as err:
-                raise UpdateFailed(
-                    f"Credenciais Tuya recusadas ({self.account_name}): {err}"
-                ) from err
+                if routing == ROUTING_CLOUD_ONLY:
+                    raise UpdateFailed(
+                        f"Credenciais Tuya recusadas ({self.account_name}): {err}"
+                    ) from err
+                _LOGGER.debug(
+                    "MW Tuya [%s]: credenciais de nuvem recusadas (%s), mantendo operação local",
+                    self.account_name,
+                    err,
+                )
             except TuyaApiError as err:
                 if routing == ROUTING_CLOUD_ONLY:
                     raise UpdateFailed(
@@ -506,6 +536,16 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ) from err
                 _LOGGER.debug(
                     "MW Tuya [%s]: nuvem indisponível (%s), mantendo operação local",
+                    self.account_name,
+                    err,
+                )
+            except Exception as err:
+                if routing == ROUTING_CLOUD_ONLY:
+                    raise UpdateFailed(
+                        f"Erro inesperado na nuvem ({self.account_name}): {err}"
+                    ) from err
+                _LOGGER.debug(
+                    "MW Tuya [%s]: falha na leitura da nuvem (%s), mantendo operação local",
                     self.account_name,
                     err,
                 )
@@ -662,7 +702,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         f"Falha no envio local para {dev.name} ({dev.local_ip}): {err}"
                     ) from err
                 _LOGGER.debug(
-                    "MW Tuya [%s]: chaveamento transparente para %s (%s) — Local falhou (%s), chaveando para Cloud",
+                    "MW Tuya [%s]: chaveamento para %s (%s) — Local falhou (%s), chaveando Cloud",
                     self.account_name,
                     dev.name,
                     dev.local_ip,
@@ -692,7 +732,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self.hass.async_add_executor_job(
                         self.smartlife.send, device_id, payload
                     )
-                except SmartLifeError as err:
+                except SmartLifeError:
                     if self.client is None:
                         raise
                     await self.client.async_send_commands(device_id, payload)
@@ -717,7 +757,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Se possuir cliente e mapa de DPs locais, tenta o acesso direto Local.
         if local_client is not None and bool(dps):
             _LOGGER.debug(
-                "MW Tuya [%s]: chaveamento transparente para %s — Nuvem indisponível (%s), ativando acesso Local direto",
+                "MW Tuya [%s]: chaveamento reverso para %s — Nuvem falhou (%s), ativando Local",
                 self.account_name,
                 dev.name,
                 cloud_err,
@@ -736,7 +776,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except TuyaLocalError as lerr:
                 local_err = lerr
                 _LOGGER.debug(
-                    "MW Tuya [%s]: acesso local direto após falha de nuvem para %s também falhou: %s",
+                    "MW Tuya [%s]: acesso local reverso após falha de nuvem para %s falhou: %s",
                     self.account_name,
                     dev.name,
                     lerr,
@@ -752,12 +792,12 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         is_quota = "60001001" in str(cloud_err) or "quota" in str(cloud_err).lower()
         if is_quota:
             raise HomeAssistantError(
-                f"Cota Tuya Cloud insuficiente ({cloud_err}) e acesso Local indisponível para {dev.name} ({dev.local_ip or 'sem IP'})"
+                f"Cota Tuya esgotada ({cloud_err}) e acesso Local indisponível para "
+                f"{dev.name} ({dev.local_ip or 'sem IP'})"
             ) from cloud_err
         raise HomeAssistantError(
             f"Falha ao enviar comando para {dev.name} via Nuvem e Local: {cloud_err}"
         ) from cloud_err
-        dev.status.update(commands)
         for c, v in commands.items():
             for alias in DP_ALIASES.get(c, ()):
                 dev.status[alias] = v
