@@ -111,7 +111,13 @@ class MwTuyaDevice:
 
     @property
     def has_valid_local_key(self) -> bool:
-        return bool(self.local_key and "*" not in self.local_key and len(self.local_key) >= 16)
+        if not self.local_key or len(self.local_key) < 16:
+            return False
+        # Máscaras da Tuya Cloud utilizam strings compostas majoritariamente por asteriscos (ex: "****************").
+        # Chaves aleatórias válidas geradas pela Tuya frequentemente contêm '*', o que é perfeitamente legítimo.
+        if self.local_key.count("*") >= 8 or set(self.local_key) == {"*"}:
+            return False
+        return True
 
     @property
     def supports_local(self) -> bool:
@@ -233,13 +239,18 @@ class MwTuyaDevice:
         return {}
 
     def resolve_dp_id(self, code: str) -> int | None:
-        """Resolve o ID numérico do DP local; `None` força a rota Cloud (nunca chuta)."""
+        """Resolve o ID numérico do DP local; busca em dp_map, aliases, mapa por categoria e defaults."""
         if code in self.dp_map:
             return self.dp_map[code]
         for alias in DP_ALIASES.get(code, ()):
             if alias in self.dp_map:
                 return self.dp_map[alias]
         if self.specs:
+            # Quando há modelo definido, só resolve códigos pertencentes ao modelo/categoria
+            if code in self.specs or any(a in self.specs for a in DP_ALIASES.get(code, ())):
+                for dp_id, mapped_code in self._dp_to_code_map().items():
+                    if mapped_code == code or mapped_code in DP_ALIASES.get(code, ()):
+                        return dp_id
             return None
         for dp_id, mapped_code in self._dp_to_code_map().items():
             if mapped_code == code or mapped_code in DP_ALIASES.get(code, ()):

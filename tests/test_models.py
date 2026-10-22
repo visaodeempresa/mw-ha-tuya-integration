@@ -159,3 +159,52 @@ def test_aliases_v1_v2_luz_thing_model(models):
     assert dev.status["bright_value"] == 750
     assert dev.status["bright_value_v2"] == 750
 
+
+def test_local_key_com_asterisco_eh_valida_mascara_invalida(models):
+    # Caso real da lâmpada OESTE e de 20 dispositivos com '*' gerado aleatoriamente pela Tuya
+    raw_oeste = {
+        "id": "ebe6aae597f0c6ed96iwaq",
+        "name": "⬛️💡 OESTE",
+        "category": "dj",
+        "local_key": "ik*Vy8/7yG^`_O3&",
+        "online": True,
+    }
+    dev_oeste = models.MwTuyaDevice.from_api(raw_oeste, {"ip": "192.168.2.135", "version": "3.3"})
+    assert dev_oeste.has_valid_local_key is True
+    assert dev_oeste.supports_local is True
+    assert dev_oeste.is_local_configured is True
+
+    # Máscaras de API da Tuya (OpenAPI sem permissão de ler local_key)
+    raw_masked = {
+        "id": "masked_dev",
+        "name": "Masked",
+        "category": "dj",
+        "local_key": "****************",
+        "online": True,
+    }
+    dev_masked = models.MwTuyaDevice.from_api(raw_masked, {"ip": "192.168.2.135", "version": "3.3"})
+    assert dev_masked.has_valid_local_key is False
+    assert dev_masked.supports_local is False
+    assert dev_masked.is_local_configured is False
+
+
+def test_resolve_dp_fallback_categoria_quando_spec_sem_dp_id(models):
+    dev = models.MwTuyaDevice(
+        device_id="dj_test",
+        name="Lâmpada",
+        category="dj",
+        local_key="0123456789abcdef",
+    )
+    spec = models.DpSpec
+    # Spec carregada sem dp_id (ex: Smart Life sem local_strategy)
+    dev.specs = {
+        "switch_led": spec("switch_led", None, "rw", "bool"),
+        "bright_value_v2": spec("bright_value_v2", None, "rw", "value"),
+    }
+    # Deve resolver pelo mapa da categoria 'dj' (1 ou 20 são válidos para switch_led)
+    assert dev.resolve_dp_id("switch_led") in (1, 20)
+    assert dev.resolve_dp_id("bright_value_v2") == 22
+    # Não chuta códigos de outra categoria (ex: plug)
+    assert dev.resolve_dp_id("cur_voltage") is None
+
+

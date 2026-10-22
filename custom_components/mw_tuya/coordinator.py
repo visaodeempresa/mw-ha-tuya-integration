@@ -357,6 +357,19 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             devices.sort(key=lambda d: d.name.lower())
             scenes.sort(key=lambda s: s.name.lower())
 
+        # Sobrevivência a reinícios durante indisponibilidade total da nuvem (ou estouro de cota)
+        if not devices and isinstance(cached.get("devices"), dict):
+            for did, raw_d in cached["devices"].items():
+                devices.append(MwTuyaDevice.from_api(raw_d, self.lan_map.get(did)))
+            _LOGGER.info(
+                "MW Tuya [%s]: nuvem indisponível, restaurados %d dispositivos do cache persistente",
+                self.account_name,
+                len(devices),
+            )
+        if not scenes and isinstance(cached.get("scenes"), dict):
+            for raw_s in cached["scenes"].values():
+                scenes.append(MwTuyaScene.from_dict(raw_s))
+
         hosts_override = self.configured_local_hosts
         versions_override = self.configured_local_versions
 
@@ -491,7 +504,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise UpdateFailed(
                         f"Tuya Cloud indisponível ({self.account_name}): {err}"
                     ) from err
-                _LOGGER.warning(
+                _LOGGER.debug(
                     "MW Tuya [%s]: nuvem indisponível (%s), mantendo operação local",
                     self.account_name,
                     err,
@@ -566,10 +579,14 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return await self.async_send_device_commands(device_id, {code: value})
 
     async def async_send_device_commands(self, device_id: str, commands: dict[str, Any]) -> str:
-        """Envia vários DPs priorizando Local (um único frame TCP 6668) com fallback Cloud.
+        """Envia vários DPs com chaveamento inteligente e transparente entre Local e Cloud.
 
-        Só vai local se TODOS os códigos tiverem `dp_id` conhecido — nunca chuta DP.
-        Retorna a rota usada: `"local"`, `"cloud_fallback"` ou `"cloud"`.
+        Em modo hybrid_local_first:
+        1. Tenta envio direto Local via TCP 6668 (com auto-recuperação de versão).
+        2. Se Local falhar ou não estiver disponível, chaveia de forma transparente para Nuvem.
+        3. Se a Nuvem falhar (ex: estouro de cota [60001001], offline, timeout) e houver rota local,
+           chaveia imediatamente de volta para acesso Local direto.
+        4. O chaveamento de canal é tratado como operacional (log DEBUG, zero ruído de IO).
         """
         dev = self.catalog_devices.get(device_id)
         if not dev:
@@ -579,8 +596,29 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not commands:
             return "noop"
 
+        # Auto-provisionamento de host/versão se ausente no objeto do dispositivo
+        if not dev.local_ip:
+            lan_info = self.lan_map.get(device_id) or {}
+            def_ip, def_ver = DEFAULT_LOCAL_HOSTS.get(device_id, ("", "3.3"))
+            if lan_info.get("ip"):
+                dev.local_ip = str(lan_info["ip"])
+                dev.local_version = str(lan_info.get("version") or def_ver)
+            elif def_ip:
+                dev.local_ip = str(def_ip)
+                dev.local_version = str(def_ver)
+
         routing = self.routing_mode
         local_client = self.local_clients.get(device_id)
+        if local_client is None and dev.is_local_configured:
+            local_client = TuyaLocalClient(
+                host=dev.local_ip,
+                device_id=dev.device_id,
+                local_key=dev.local_key,
+                version=dev.local_version,
+            )
+            self.local_clients[device_id] = local_client
+            self.local_ok.setdefault(device_id, True)
+
         dps: dict[str, Any] = {}
         for code, value in commands.items():
             dp = dev.resolve_dp_id(code)
@@ -593,14 +631,19 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             routing != ROUTING_CLOUD_ONLY
             and local_client is not None
             and bool(dps)
-            and self.local_ok.get(device_id, True)
         )
 
+        local_attempted = False
+        local_err: Exception | None = None
+
+        # 1. Rota Local Primária
         if can_try_local and local_client is not None:
+            local_attempted = True
             try:
                 if await local_client.async_set_dps(dps, node_id=dev.node_id):
                     self._record_stat(device_id, "local_ok")
                     self._local_misses[device_id] = 0
+                    self.local_ok[device_id] = True
                     dev.status.update(commands)
                     for c, v in commands.items():
                         for alias in DP_ALIASES.get(c, ()):
@@ -608,6 +651,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.async_set_updated_data(self.data or {})
                     return "local"
             except TuyaLocalError as err:
+                local_err = err
                 self._record_stat(device_id, "local_fail")
                 misses = self._local_misses.get(device_id, 0) + 1
                 self._local_misses[device_id] = misses
@@ -617,8 +661,8 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise HomeAssistantError(
                         f"Falha no envio local para {dev.name} ({dev.local_ip}): {err}"
                     ) from err
-                _LOGGER.info(
-                    "MW Tuya [%s]: envio local para %s (%s) falhou (%s); fallback Cloud",
+                _LOGGER.debug(
+                    "MW Tuya [%s]: chaveamento transparente para %s (%s) — Local falhou (%s), chaveando para Cloud",
                     self.account_name,
                     dev.name,
                     dev.local_ip,
@@ -630,6 +674,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 f"Dispositivo {dev.name} está em modo local_only mas não possui rota local ativa."
             )
 
+        # 2. Rota de Nuvem (Smart Life ou OpenAPI)
         payload = []
         for c, v in commands.items():
             target_code = c
@@ -640,6 +685,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
             payload.append({"code": target_code, "value": v})
 
+        cloud_err: Exception | None = None
         try:
             if self.smartlife is not None and device_id in self.sl_devices:
                 try:
@@ -648,28 +694,69 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 except SmartLifeError as err:
                     if self.client is None:
-                        raise HomeAssistantError(
-                            f"Smart Life recusou o comando para {dev.name}: {err}"
-                        ) from err
+                        raise
                     await self.client.async_send_commands(device_id, payload)
             elif self.client is not None:
                 await self.client.async_send_commands(device_id, payload)
             else:
-                raise HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
-        except HomeAssistantError:
-            raise
-        except (SmartLifeError, TuyaApiError, TuyaAuthError) as err:
-            _LOGGER.warning(
-                "MW Tuya [%s]: comando para %s recuado pela nuvem: %s",
+                cloud_err = HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
+        except (SmartLifeError, TuyaApiError, TuyaAuthError, Exception) as err:
+            cloud_err = err
+
+        if cloud_err is None:
+            route = "cloud_fallback" if local_attempted else "cloud"
+            self._record_stat(device_id, route)
+            dev.status.update(commands)
+            for c, v in commands.items():
+                for alias in DP_ALIASES.get(c, ()):
+                    dev.status[alias] = v
+            self.async_set_updated_data(self.data or {})
+            return route
+
+        # 3. Chaveamento de canal reverso: Nuvem falhou (ex: cota 60001001 / offline / timeout).
+        # Se possuir cliente e mapa de DPs locais, tenta o acesso direto Local.
+        if local_client is not None and bool(dps):
+            _LOGGER.debug(
+                "MW Tuya [%s]: chaveamento transparente para %s — Nuvem indisponível (%s), ativando acesso Local direto",
                 self.account_name,
                 dev.name,
-                err,
+                cloud_err,
             )
+            try:
+                if await local_client.async_set_dps(dps, node_id=dev.node_id):
+                    self._record_stat(device_id, "local_fallback")
+                    self._local_misses[device_id] = 0
+                    self.local_ok[device_id] = True
+                    dev.status.update(commands)
+                    for c, v in commands.items():
+                        for alias in DP_ALIASES.get(c, ()):
+                            dev.status[alias] = v
+                    self.async_set_updated_data(self.data or {})
+                    return "local_fallback"
+            except TuyaLocalError as lerr:
+                local_err = lerr
+                _LOGGER.debug(
+                    "MW Tuya [%s]: acesso local direto após falha de nuvem para %s também falhou: %s",
+                    self.account_name,
+                    dev.name,
+                    lerr,
+                )
+
+        _LOGGER.debug(
+            "MW Tuya [%s]: comando para %s sem sucesso em ambos os canais (nuvem=%s, local=%s)",
+            self.account_name,
+            dev.name,
+            cloud_err,
+            local_err,
+        )
+        is_quota = "60001001" in str(cloud_err) or "quota" in str(cloud_err).lower()
+        if is_quota:
             raise HomeAssistantError(
-                f"Falha ao enviar comando para {dev.name} via nuvem ({self.account_name}): {err}"
-            ) from err
-        route = "cloud_fallback" if can_try_local else "cloud"
-        self._record_stat(device_id, route)
+                f"Cota Tuya Cloud insuficiente ({cloud_err}) e acesso Local indisponível para {dev.name} ({dev.local_ip or 'sem IP'})"
+            ) from cloud_err
+        raise HomeAssistantError(
+            f"Falha ao enviar comando para {dev.name} via Nuvem e Local: {cloud_err}"
+        ) from cloud_err
         dev.status.update(commands)
         for c, v in commands.items():
             for alias in DP_ALIASES.get(c, ()):

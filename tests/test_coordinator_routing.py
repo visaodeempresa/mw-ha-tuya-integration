@@ -79,6 +79,33 @@ def test_erro_quota_vira_erro_de_servico(cw, models, dev):
     assert dev.status.get("switch_led") is not True
 
 
+def test_erro_quota_faz_fallback_automatico_para_local(cw, models, dev):
+    api = importlib.import_module("mwtuya.api")
+
+    class ClientEsgotado:
+        async def async_send_commands(self, did, payload):
+            raise api.TuyaApiError("60001001", "Your controllable device pool quota is insufficient", "/commands")
+
+    class FakeLocalClient:
+        def __init__(self):
+            self.sent_dps = None
+
+        async def async_set_dps(self, dps, node_id=""):
+            self.sent_dps = dps
+            return True
+
+    fake_local = FakeLocalClient()
+    c = _coordinator(cw, dev, client=ClientEsgotado())
+    c.local_clients[dev.device_id] = fake_local
+    c.local_ok[dev.device_id] = False  # Simula poller offline temporário
+
+    route = asyncio.run(c.async_send_device_commands(dev.device_id, {"switch_led": True}))
+    assert route in ("local", "local_fallback")
+    assert fake_local.sent_dps == {"20": True}
+    assert dev.status.get("switch_led") is True
+    assert c.local_ok[dev.device_id] is True
+
+
 def test_restauro_do_cache_do_canal_smartlife_cruza_restart(cw):
     c = cw.MwTuyaCoordinator.__new__(cw.MwTuyaCoordinator)
     c.sl_devices = set()

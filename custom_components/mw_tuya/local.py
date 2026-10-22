@@ -450,18 +450,33 @@ class TuyaLocalDevice:
         attempts: int = 2,
         node_id: str = "",
     ) -> bool:
-        """Envia DPs ao dispositivo via TCP 6668."""
+        """Envia DPs ao dispositivo via TCP 6668 com auto-recuperação de versão do protocolo."""
         if len(self._real_key) != 16:
             raise TuyaLocalError(f"{self.device_id}: local_key inválida (len != 16)")
         last_err: Exception | None = None
-        for attempt in range(max(1, attempts)):
-            if attempt:
-                await asyncio.sleep(0.3 * attempt)
-            try:
-                return await self._set_dps_once(dps, node_id=node_id)
-            except TuyaLocalError as err:
-                last_err = err
-                self.last_error = str(err)
+        versions_to_try = [self.version]
+        if self.version in ("3.4", "3.5"):
+            versions_to_try.append("3.3")
+        else:
+            versions_to_try.append("3.4")
+
+        orig_ver = self.version
+        for ver in versions_to_try:
+            self.version = ver
+            for attempt in range(max(1, attempts)):
+                if attempt:
+                    await asyncio.sleep(0.2 * attempt)
+                try:
+                    if await self._set_dps_once(dps, node_id=node_id):
+                        return True
+                except TuyaLocalError as err:
+                    last_err = err
+                    self.last_error = str(err)
+                except Exception as err:
+                    last_err = err
+                    self.last_error = str(err)
+                    break
+        self.version = orig_ver
         raise last_err if last_err else TuyaLocalError(f"{self.host}: falha desconhecida")
 
     async def _set_dps_once(self, dps: dict[str, Any], node_id: str = "") -> bool:
@@ -498,9 +513,25 @@ class TuyaLocalDevice:
                         await writer.wait_closed()
 
     async def async_get_dps(self, node_id: str = "") -> dict[str, Any] | None:
-        """Consulta os DPs atuais do dispositivo via `DP_QUERY` (0x0A / 0x10)."""
+        """Consulta os DPs atuais do dispositivo via `DP_QUERY` (0x0A / 0x10) com auto-recuperação."""
         if len(self._real_key) != 16:
             return None
+        orig_ver = self.version
+        versions_to_try = [self.version]
+        if self.version in ("3.4", "3.5"):
+            versions_to_try.append("3.3")
+        else:
+            versions_to_try.append("3.4")
+
+        for ver in versions_to_try:
+            self.version = ver
+            dps = await self._get_dps_once(node_id=node_id)
+            if dps is not None:
+                return dps
+        self.version = orig_ver
+        return None
+
+    async def _get_dps_once(self, node_id: str = "") -> dict[str, Any] | None:
         async with self._lock:
             writer: asyncio.StreamWriter | None = None
             try:
