@@ -16,6 +16,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -49,6 +50,11 @@ _LOGGER = logging.getLogger(__name__)
 LOCAL_POLL_CONCURRENCY = 8
 LOCAL_POLL_TIMEOUT = 4.0
 LOCAL_REPROBE_SECONDS = 300
+
+
+def _msg_cena(scene: MwTuyaScene, err: Exception) -> str:
+    """Mensagem amigável para falha de nuvem ao acionar uma cena."""
+    return f"Falha ao acionar a cena {scene.name} via nuvem: {err}"
 
 
 class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -222,6 +228,15 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if sid in self.catalog_scenes
         ]
 
+    def _restore_sl_cache(self, cached: dict[str, Any]) -> None:
+        """Restaura o cache do canal Smart Life gravado no storage (resiliente a reinícios)."""
+        cached_sl_devs = cached.get("sl_devices")
+        if isinstance(cached_sl_devs, list):
+            self.sl_devices.update(str(x) for x in cached_sl_devs if str(x))
+        cached_sl_scenes = cached.get("sl_scenes")
+        if isinstance(cached_sl_scenes, list):
+            self.sl_scenes.update(str(x) for x in cached_sl_scenes if str(x))
+
     def _harvest_existing_ha_hosts(self) -> dict[str, dict[str, str]]:
         """Importa IPs e versões de entradas `localtuya` ou `mw_infrared` no HA."""
         harvested: dict[str, dict[str, str]] = {}
@@ -288,12 +303,15 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Canal Smart Life: aparelhos, status, local_key, specs e cenas
         sl_specs: dict[str, dict[str, DpSpec]] = {}
-        self.sl_devices.clear()
-        self.sl_scenes.clear()
         if self.smartlife is not None:
+            # Sobrevive a reinícios do HA: o cache do canal (sem cota OpenAPI 60001001)
+            # volta antes do load; só é descartado após uma carga completa bem-sucedida.
+            self._restore_sl_cache(cached)
             sl = self.smartlife
             try:
                 await self.hass.async_add_executor_job(sl.load, selected_set)
+                self.sl_devices.clear()
+                self.sl_scenes.clear()
                 by_id = {d.device_id: d for d in devices}
                 for did, sdev in sl.devices.items():
                     raw = raw_from_device(sdev)
@@ -405,6 +423,8 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "lan_map": self.lan_map,
                 "devices": {k: v.to_dict() for k, v in self.catalog_devices.items()},
                 "scenes": {k: v.to_dict() for k, v in self.catalog_scenes.items()},
+                "sl_devices": sorted(self.sl_devices),
+                "sl_scenes": sorted(self.sl_scenes),
                 "models": {
                     k: {c: s.to_dict() for c, s in v.items()} for k, v in models_cache.items()
                 },
@@ -620,20 +640,34 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         break
             payload.append({"code": target_code, "value": v})
 
-        if self.smartlife is not None and device_id in self.sl_devices:
-            try:
-                await self.hass.async_add_executor_job(self.smartlife.send, device_id, payload)
-            except SmartLifeError as err:
-                if self.client is not None:
+        try:
+            if self.smartlife is not None and device_id in self.sl_devices:
+                try:
+                    await self.hass.async_add_executor_job(
+                        self.smartlife.send, device_id, payload
+                    )
+                except SmartLifeError as err:
+                    if self.client is None:
+                        raise HomeAssistantError(
+                            f"Smart Life recusou o comando para {dev.name}: {err}"
+                        ) from err
                     await self.client.async_send_commands(device_id, payload)
-                else:
-                    raise HomeAssistantError(
-                        f"Smart Life recusou o comando para {dev.name}: {err}"
-                    ) from err
-        elif self.client is not None:
-            await self.client.async_send_commands(device_id, payload)
-        else:
-            raise HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
+            elif self.client is not None:
+                await self.client.async_send_commands(device_id, payload)
+            else:
+                raise HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
+        except HomeAssistantError:
+            raise
+        except (SmartLifeError, TuyaApiError, TuyaAuthError) as err:
+            _LOGGER.warning(
+                "MW Tuya [%s]: comando para %s recuado pela nuvem: %s",
+                self.account_name,
+                dev.name,
+                err,
+            )
+            raise HomeAssistantError(
+                f"Falha ao enviar comando para {dev.name} via nuvem ({self.account_name}): {err}"
+            ) from err
         route = "cloud_fallback" if can_try_local else "cloud"
         self._record_stat(device_id, route)
         dev.status.update(commands)
@@ -655,12 +689,18 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 return True
             except Exception:
-                if self.client is not None:
+                if self.client is None:
+                    raise
+                try:
                     return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
-                raise
+                except (TuyaApiError, TuyaAuthError) as err:
+                    raise HomeAssistantError(_msg_cena(scene, err)) from err
         if self.client is None:
             raise HomeAssistantError(f"Cena {scene.name} sem rota de nuvem disponível")
-        return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
+        try:
+            return await self.client.async_trigger_scene(scene.home_id, scene.scene_id)
+        except (TuyaApiError, TuyaAuthError) as err:
+            raise HomeAssistantError(_msg_cena(scene, err)) from err
 
     async def async_stream_url(self, device_id: str) -> str | None:
         """URL RTSP da câmera: Smart Life (sem assinatura extra) ou OpenAPI."""
@@ -683,7 +723,3 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _record_stat(self, device_id: str, key: str) -> None:
         bucket = self.stats.setdefault(device_id, {})
         bucket[key] = bucket.get(key, 0) + 1
-
-
-class HomeAssistantError(RuntimeError):
-    """Erro operacional reportado ao Home Assistant."""

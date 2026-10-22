@@ -3,6 +3,21 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.4.1] — 2026-10-21
+
+### Corrigido
+
+- **Diagnóstico das luzes LESTE e OESTE do escritório** (rastreamento integral no log do HA):
+  - `OESTE` executava `light/turn_on` sem rota local (local_key inválida) e sem o canal Smart Life, caía na OpenAPI e recebia `TuyaApiError [60001001] Your controllable device pool quota is insufficient` cru — matando o serviço com 500 e quebrando as automações `LIGAR LUZES DO ESCRITÓRIO COM OCUPAÇÃO` (14 falhas) e `DESLIGAR LUZES DO ESCRITÓRIO SEM OCUPAÇÃO` (28 falhas).
+  - Falha parcial no catálogo Smart Life (`network error:(-9999999) sign invalid`) apagava `sl_devices` inteiro no meio do carregamento, forçando **todos** os aparelhos para a rota limitada da OpenAPI.
+- **Erros de nuvem agora chegam como erro de serviço tratável**: `async_send_device_commands` e `async_trigger_scene` embrulham `TuyaApiError`/`TuyaAuthError`/`SmartLifeError` em `HomeAssistantError` da própria HA (`homeassistant.exceptions`), com mensagem clara e sem traceback cru.
+- **Canal Smart Life sobrevive a falhas parciais e a reinícios**: o cache `sl_devices`/`sl_scenes` é gravado no storage junto do catálogo e restaurado antes do `load`; os conjuntos só são descartados após uma carga completa bem-sucedida — aparelhos ficam de volta no canal sem cota OpenAPI mesmo que o CAM/QR relogue falhe.
+
+### Notas
+
+- A correção mora no `custom_components/mw_tuya` e o cache do canal é recarregado do `Store` no boot: após atualizar pelo HACS e reiniciar o HA, nada é perdido entre religar/desligar o Home Assistant.
+- `homeassistant.exceptions.HomeAssistantError` agora é re-exportado pelo coordenador (antes era um `RuntimeError` local que a HA não reconhecia como erro de serviço).
+
 ## [0.3.1] — 2026-10-20
 
 ### Corrigido

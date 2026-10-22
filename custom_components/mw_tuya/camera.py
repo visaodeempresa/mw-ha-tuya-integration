@@ -9,6 +9,7 @@ vinculado a `/tmp/leticia_snapshots`) e zero dependência de nuvem ou fotos anti
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from pathlib import Path
@@ -199,7 +200,7 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
         return f"rtsp://admin:admin@{ip}:{port}{path}"
 
     async def _async_ensure_local_onvif(self) -> bool:
-        """Garante via TCP 6668 (protocolo 3.4) que o servidor ONVIF/RTSP local da câmera está ativo."""
+        """Garante via TCP 6668 (proto 3.4) que o servidor ONVIF/RTSP local da câmera está ativo."""
         if not self._local_cfg:
             return False
         dev = self.device_obj
@@ -244,7 +245,9 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
                 await self._async_capture_from_rtsp(url, timeout=6.0, force_media=True)
                 self.async_write_ha_state()
         except Exception as err:
-            _LOGGER.debug("Pré-aquecimento da câmera %s concluído com aviso: %s", self.entity_id, err)
+            _LOGGER.debug(
+                "Pré-aquecimento da câmera %s concluído com aviso: %s", self.entity_id, err
+            )
 
     # ------------------------------------------------------------------ estado
     @property
@@ -279,7 +282,10 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
         try:
             url = await self.coordinator.async_stream_url(self._device_id)
         except (TuyaApiError, SmartLifeError) as err:
-            if getattr(err, "code", None) in (28841101, 1106) and self.coordinator.smartlife is None:
+            if getattr(err, "code", None) in (
+                28841101,
+                1106,
+            ) and self.coordinator.smartlife is None:
                 self._stream_denied_until = now + STREAM_RETRY_COOLDOWN
             return self._stream_url
         except Exception:
@@ -332,10 +338,8 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
                 return stdout
         except TimeoutError:
             if proc is not None:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     proc.kill()
-                except ProcessLookupError:
-                    pass
         except Exception as err:
             _LOGGER.debug("Erro ffmpeg RTSP em %s: %s", self.entity_id, err)
         return None
@@ -354,7 +358,9 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
             # Se a câmera reiniciou, reativa o servidor ONVIF local via TCP 6668 e tenta novamente
             await self._async_ensure_local_onvif()
             await asyncio.sleep(0.4)
-            stdout = await self._async_run_ffmpeg(source, width=width, height=height, timeout=timeout)
+            stdout = await self._async_run_ffmpeg(
+                source, width=width, height=height, timeout=timeout
+            )
 
         if stdout:
             now = time.monotonic()
@@ -394,7 +400,7 @@ class MwTuyaCamera(MwTuyaEntity, CameraEntity):
             except Exception:
                 pass
 
-        # Retorna apenas frame capturado recentemente na sessão atual (nunca arquivo antigo de dias atrás)
+        # Frame só da sessão atual: nunca reaproveita arquivo capturado há dias.
         if self._last_image and (now - self._last_image_at < 120.0):
             return self._last_image
         return None
