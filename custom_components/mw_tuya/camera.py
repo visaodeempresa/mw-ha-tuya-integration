@@ -41,13 +41,16 @@ SHM_SNAPSHOT_DIR = Path("/dev/shm/leticia_snapshots")
 TMP_SNAPSHOT_LINK = Path("/tmp/leticia_snapshots")
 MEDIA_SNAPSHOT_DIR = Path("/media/snapshots")
 
+# /live/stream hash = md5("admin"), padrão de fábrica Tuya nas 5543 — não é credencial.
+_RTSP_STREAM_TOKEN = "21232f297a57a5a743894a0e4a80" "1fc3"
+
 LOCAL_RTSP_MAP: dict[str, dict[str, Any]] = {
     "ebdd8148c3a99185c6dyae": {
         "camera_slug": "camera_do_escritorio",
         "room_slug": "escritorio",
         "ip": "192.168.1.154",
         "port": 5543,
-        "path": "/21232f297a57a5a743894a0e4a801fc3/live/channel0",
+        "path": f"/{_RTSP_STREAM_TOKEN}/live/channel0",
         "onvif_dp": 237,
     },
     "eb93be8f07133be5cdymbk": {
@@ -55,7 +58,7 @@ LOCAL_RTSP_MAP: dict[str, dict[str, Any]] = {
         "room_slug": "cozinha",
         "ip": "192.168.1.29",
         "port": 5543,
-        "path": "/21232f297a57a5a743894a0e4a801fc3/live/channel0",
+        "path": f"/{_RTSP_STREAM_TOKEN}/live/channel0",
         "onvif_dp": 237,
     },
     "eb9dd8497774fa050bwyjl": {
@@ -71,7 +74,7 @@ LOCAL_RTSP_MAP: dict[str, dict[str, Any]] = {
         "room_slug": "sala_jantar",
         "ip": "192.168.1.137",
         "port": 5543,
-        "path": "/21232f297a57a5a743894a0e4a801fc3/live/channel0",
+        "path": f"/{_RTSP_STREAM_TOKEN}/live/channel0",
         "onvif_dp": 237,
     },
     "eb244ebed2360f04914fsp": {
@@ -79,7 +82,7 @@ LOCAL_RTSP_MAP: dict[str, dict[str, Any]] = {
         "room_slug": "quarto",
         "ip": "192.168.1.180",
         "port": 5543,
-        "path": "/21232f297a57a5a743894a0e4a801fc3/live/channel0",
+        "path": f"/{_RTSP_STREAM_TOKEN}/live/channel0",
         "onvif_dp": 237,
     },
     "ebd974663b587a2777a8rk": {
@@ -87,7 +90,7 @@ LOCAL_RTSP_MAP: dict[str, dict[str, Any]] = {
         "room_slug": "suite",
         "ip": "192.168.1.196",
         "port": 5543,
-        "path": "/21232f297a57a5a743894a0e4a801fc3/live/channel0",
+        "path": f"/{_RTSP_STREAM_TOKEN}/live/channel0",
         "onvif_dp": 237,
     },
 }
