@@ -8,6 +8,7 @@ cache do canal Smart Life precisa sobreviver ao restart do Home Assistant.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 from pathlib import Path
@@ -59,7 +60,7 @@ def _coordinator(cw, dev, client=None):
     return c
 
 
-async def test_erro_quota_vira_erro_de_servico(cw, models, dev):
+def test_erro_quota_vira_erro_de_servico(cw, models, dev):
     from homeassistant.exceptions import HomeAssistantError
 
     api = importlib.import_module("mwtuya.api")
@@ -70,13 +71,13 @@ async def test_erro_quota_vira_erro_de_servico(cw, models, dev):
 
     c = _coordinator(cw, dev, client=ClientEsgotado())
     with pytest.raises(HomeAssistantError) as exc:
-        await c.async_send_device_commands(dev.device_id, {"switch_led": True})
+        asyncio.run(c.async_send_device_commands(dev.device_id, {"switch_led": True}))
     assert "60001001" in str(exc.value)
     # o estado do aparelho NÃO deve ser atualizado quando o comando falha
     assert dev.status.get("switch_led") is not True
 
 
-async def test_restauro_do_cache_do_canal_smartlife_cruza_restart(cw):
+def test_restauro_do_cache_do_canal_smartlife_cruza_restart(cw):
     c = cw.MwTuyaCoordinator.__new__(cw.MwTuyaCoordinator)
     c.sl_devices = set()
     c.sl_scenes = set()
