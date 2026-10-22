@@ -47,11 +47,13 @@ def _coordinator(cw, dev, client=None):
     c.smartlife = None
     c.account_name = "Conta Teste"
     c.config_entry = SimpleNamespace(
-        data={"routing_mode": "hybrid_local_first"},
+        data={
+            "routing_mode": "hybrid_local_first",
+            "selected_devices": [dev.device_id],
+        },
         options={},
     )
     c.catalog_devices = {dev.device_id: dev}
-    c.selected_device_ids = [dev.device_id]
     c.local_clients = {}
     c.local_ok = {}
     c._local_misses = {}
