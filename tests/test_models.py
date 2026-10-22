@@ -32,6 +32,12 @@ def test_dispositivo_com_local_key_e_ip_eh_hibrido(models):
     assert ("sensor", "cur_voltage") in plataformas
     assert ("sensor", "cur_current") in plataformas
 
+    by_code = {s.code: s for s in specs}
+    assert by_code["cur_voltage"].enabled_default is True
+    assert by_code["cur_voltage"].entity_category is None
+    assert by_code["cur_current"].enabled_default is True
+    assert by_code["cur_current"].entity_category is None
+
 
 def test_thing_model_mapeia_dp_id_e_infere_select_number_button(models):
     dev = models.MwTuyaDevice(

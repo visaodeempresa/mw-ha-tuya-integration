@@ -3,6 +3,14 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.4.5] — 2026-10-22
+
+### Corrigido
+
+- **Sensores de Tensão (`cur_voltage`) e Corrente (`cur_current`) em "Sensores"**:
+  - Ajustada a especificação de catálogo (`catalog.py`) para habilitar `cur_voltage` e `cur_current` por padrão (`enabled_default=True`).
+  - Remoção automática da categoria de diagnóstico (`entity_category=None`), fazendo com que o Home Assistant agrupe a Tensão (V) e a Corrente (mA/A) no bloco principal de Sensores junto à Potência (W), e permitindo que seletores em cards (como o MW Power Button Card) identifiquem os sensores imediatamente sem necessidade de ativação manual.
+
 ## [0.4.4] — 2026-10-22
 
 ### Adicionado / Corrigido
