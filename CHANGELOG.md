@@ -3,6 +3,33 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.4.6] — 2026-10-24
+
+### Corrigido
+
+- **Luzes demorando até 22 s para acender por ocupação** (estantes/bibliotech/mística
+  e demais do escritório): o transporte local era **efêmero por comando** (`open →
+  send → close`); aparelhos Tuya recusam/omitem conexões novas nos segundos após
+  fechar a anterior, e a rajada de comandos virava 2 versões × 2 tentativas × 5 s
+  de timeout antes do fallback de nuvem — medido: `turn_off` ~0,5 s, `turn_on`
+  ~21 s. O transporte agora mantém **conexão persistente por aparelho**
+  (reaproveitada por comando e leitura; a leitura de polling usa o mesmo socket,
+  sem disputa de assento), com timeout curto de comando (1,5 s) e de conexão
+  (2 s) — em qualquer falha de transporte o socket é descartado, o próximo
+  comando reconecta e o fallback de nuvem acontece em segundos, não em minutos.
+  Semântica preservada: sem ACK = aceito; conexão fechada sem bytes = retry em
+  socket novo; auto-recuperação de versão 3.3/3.4/3.5 intacta.
+- **Sockets órfãos no unload/reload**: `async_unload_entry` fecha os clientes
+  locais (`coordinator.async_close_local_clients()`); o recarregamento de catálogo
+  também fecha os sockets antes de descartar os clientes.
+
+### Adicionado
+
+- `TuyaLocalDevice.async_close()`, parâmetro `port` (testabilidade) e
+  `tests/test_local_persistente.py` travando: reuso de socket em rajada
+  (1 conexão, 2 comandos), reconexão após socket morto, `async_close` e ping
+  sem conexão nova.
+
 ## [0.4.5] — 2026-10-22
 
 ### Corrigido

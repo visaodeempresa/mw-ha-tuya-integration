@@ -160,6 +160,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator = hass.data[DOMAIN].pop(entry.entry_id, None)
         if coordinator is not None:
             await coordinator.async_stop_smartlife()
+            await coordinator.async_close_local_clients()
         if not hass.data[DOMAIN]:
             hass.data.pop(DOMAIN, None)
             async_unload_services(hass)

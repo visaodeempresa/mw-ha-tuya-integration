@@ -1,9 +1,13 @@
 """Transporte Local Tuya (TCP 6668, protocolos 3.3, 3.4 e 3.5 + descoberta UDP 6666/6667/7000).
 
 Implementa:
-- **Conexão efêmera por comando (`open -> negotiate/send -> close`)**: dispositivos Tuya
-  aceitam apenas 1 socket TCP por vez; abrir e fechar por operação (~80–180 ms) evita
-  travar o aparelho ou disputar conexão.
+- **Conexão persistente por aparelho**: os aparelhos Tuya aceitam apenas 1 socket TCP
+  por vez e recusam/omitem novas conexões por vários segundos depois de fechar uma —
+  reconectar a cada comando media 6–21 s em rajada (medido em 24/10/2026, ligar as
+  luzes demorava até 22 s). O socket fica aberto e é reaproveitado por comando E
+  leitura; em qualquer falha de transporte é descartado e reaberto na próxima
+  operação, com timeout curto de comando (1,5 s) para o fallback de nuvem acontecer
+  em segundos, não em minutos.
 - **Protocolo 3.3**: Quadro `0x000055AA ... CRC32 + 0x0000AA55`, AES-128-ECB PKCS7,
   cabeçalho `b"3.3" + 12 zeros` em `CMD_CONTROL (0x07)`.
 - **Protocolo 3.4**: Quadro `0x000055AA ... HMAC-SHA256(32B) + 0x0000AA55`, negociação
@@ -305,7 +309,13 @@ async def async_discover_local_devices(
 
 
 class TuyaLocalDevice:
-    """Cliente TCP 6668 efêmero para controle local de um dispositivo Tuya (3.3, 3.4 e 3.5)."""
+    """Cliente TCP 6668 com conexão persistente por aparelho (3.3, 3.4 e 3.5)."""
+
+    # Conexão nova (TCP connect): 2 s — aparelho morto não prende o fallback de nuvem.
+    CONNECT_TIMEOUT = 2.0
+    # Comando (write + leitura de ACK): 1,5 s — LAN responde em <100 ms; mais que
+    # isso o aparelho está esquisito e a nuvem atende mais rápido que esperar.
+    COMMAND_TIMEOUT = 1.5
 
     def __init__(
         self,
@@ -314,15 +324,86 @@ class TuyaLocalDevice:
         local_key: str,
         version: str = "3.3",
         timeout: float = 5.0,
+        port: int = TCP_PORT,
     ) -> None:
         self.host = host
         self.device_id = device_id
         self._real_key = local_key.encode("utf-8")
         self.version = version if version in ("3.1", "3.2", "3.3", "3.4", "3.5") else "3.3"
         self.timeout = timeout
+        self.port = port
         self._seq = 0
         self._lock = asyncio.Lock()
         self.last_error: str = ""
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._session_key: bytes | None = None
+        self._connected_version: str | None = None
+
+    async def _drop(self) -> None:
+        """Derruba o socket persistente. O chamador já deve segurar o `_lock`."""
+        self._session_key = None
+        self._connected_version = None
+        writer, self._writer, self._reader = self._writer, None, None
+        if writer is not None:
+            with contextlib.suppress(Exception):
+                writer.close()
+                await writer.wait_closed()
+
+    async def async_close(self) -> None:
+        """Fecha o socket persistente (unload da integração)."""
+        async with self._lock:
+            await self._drop()
+
+    async def _ensure_connected(self) -> bytes:
+        """Reaproveita o socket aberto ou abre um novo; devolve a chave de sessão."""
+        if (
+            self._writer is not None
+            and not self._writer.is_closing()
+            and self._connected_version == self.version
+            and self._session_key is not None
+        ):
+            return self._session_key
+        await self._drop()
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_connection(self.host, self.port),
+            timeout=self.CONNECT_TIMEOUT,
+        )
+        self._connected_version = self.version
+        try:
+            self._session_key = await self._negotiate_session_key(self._reader, self._writer)
+        except Exception:
+            await self._drop()
+            raise
+        return self._session_key
+
+    async def _exchange(
+        self, pkt: bytes, timeout: float, read_size: int
+    ) -> bytes | None:
+        """Escreve e lê um chunk no socket persistente.
+
+        Devolve `None` em leitura vazia (sem resposta no timeout). Falha de
+        transporte (socket morto) derruba o socket e vira `TuyaLocalError` — a
+        próxima operação reconecta.
+        """
+        if self._writer is None or self._reader is None:
+            raise TuyaLocalError(f"{self.host}: socket não aberto")
+        try:
+            self._writer.write(pkt)
+            await asyncio.wait_for(self._writer.drain(), timeout=timeout)
+        except TimeoutError as err:
+            await self._drop()
+            raise TuyaLocalError(f"{self.host}: {err}") from err
+        except OSError as err:
+            await self._drop()
+            raise TuyaLocalError(f"{self.host}: {err}") from err
+        try:
+            return await asyncio.wait_for(self._reader.read(read_size), timeout=timeout)
+        except TimeoutError:
+            return None
+        except OSError as err:
+            await self._drop()
+            raise TuyaLocalError(f"{self.host}: {err}") from err
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -392,7 +473,7 @@ class TuyaLocalDevice:
         writer.write(pkt_start)
         await writer.drain()
 
-        data = await asyncio.wait_for(reader.read(2048), timeout=self.timeout)
+        data = await asyncio.wait_for(reader.read(2048), timeout=self.COMMAND_TIMEOUT)
         bodies = self._extract_response_bodies(data, self._real_key)
         resp_payload = next(
             (b for cmd, b in bodies if cmd == CMD_SESS_KEY_NEG_RESP and len(b) >= 48),
@@ -481,36 +562,29 @@ class TuyaLocalDevice:
 
     async def _set_dps_once(self, dps: dict[str, Any], node_id: str = "") -> bool:
         async with self._lock:
-            writer: asyncio.StreamWriter | None = None
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, TCP_PORT),
-                    timeout=self.timeout,
-                )
-                session_key = await self._negotiate_session_key(reader, writer)
-                cmd = CMD_CONTROL_NEW if self.version in ("3.4", "3.5") else CMD_CONTROL
-                pkt = self._encode_packet(
-                    cmd, self._build_control_json(dps, node_id=node_id), session_key
-                )
-                writer.write(pkt)
-                await writer.drain()
-                try:
-                    data = await asyncio.wait_for(reader.read(2048), timeout=self.timeout)
-                except TimeoutError:
-                    self.last_error = ""
-                    return True
-                bodies = self._extract_response_bodies(data, session_key)
-                if bodies or data:
-                    self.last_error = ""
-                    return True
-                return False
+                session_key = await self._ensure_connected()
+            except TuyaLocalError:
+                raise
             except (TimeoutError, OSError) as err:
+                await self._drop()
                 raise TuyaLocalError(f"{self.host}: {err}") from err
-            finally:
-                if writer is not None:
-                    writer.close()
-                    with contextlib.suppress(Exception):
-                        await writer.wait_closed()
+            cmd = CMD_CONTROL_NEW if self.version in ("3.4", "3.5") else CMD_CONTROL
+            pkt = self._encode_packet(
+                cmd, self._build_control_json(dps, node_id=node_id), session_key
+            )
+            data = await self._exchange(pkt, self.COMMAND_TIMEOUT, 2048)
+            if data is None:
+                # Sem ACK: presume-se aceito (semântica antiga), mas o socket é
+                # descartado — se o aparelho sumiu, a próxima operação reconecta.
+                await self._drop()
+                return True
+            if not data:
+                # Aparelho fechou a conexão sem bytes: retry em socket novo.
+                await self._drop()
+                return False
+            bodies = self._extract_response_bodies(data, session_key)
+            return bool(bodies or data)
 
     async def async_get_dps(self, node_id: str = "") -> dict[str, Any] | None:
         """Consulta os DPs atuais via `DP_QUERY` com auto-recuperação de versão."""
@@ -533,36 +607,33 @@ class TuyaLocalDevice:
 
     async def _get_dps_once(self, node_id: str = "") -> dict[str, Any] | None:
         async with self._lock:
-            writer: asyncio.StreamWriter | None = None
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(self.host, TCP_PORT),
-                    timeout=self.timeout,
-                )
-                session_key = await self._negotiate_session_key(reader, writer)
-                if self.version in ("3.4", "3.5"):
-                    cmd = CMD_DP_QUERY_NEW
-                    q_obj: dict[str, Any] = {"data": {"cid": node_id}} if node_id else {}
-                    q_bytes = json.dumps(q_obj, separators=(",", ":")).encode("utf-8")
-                else:
-                    cmd = CMD_DP_QUERY
-                    q_obj = (
-                        {"cid": node_id}
-                        if node_id
-                        else {"gwId": self.device_id, "devId": self.device_id}
-                    )
-                    q_bytes = json.dumps(q_obj, separators=(",", ":")).encode("utf-8")
-                writer.write(self._encode_packet(cmd, q_bytes, session_key))
-                await writer.drain()
-                data = await asyncio.wait_for(reader.read(4096), timeout=self.timeout)
-            except (TimeoutError, OSError, TuyaLocalError) as err:
+                session_key = await self._ensure_connected()
+            except (TuyaLocalError, TimeoutError, OSError) as err:
                 self.last_error = str(err)
+                await self._drop()
                 return None
-            finally:
-                if writer is not None:
-                    writer.close()
-                    with contextlib.suppress(Exception):
-                        await writer.wait_closed()
+            if self.version in ("3.4", "3.5"):
+                cmd = CMD_DP_QUERY_NEW
+                q_obj: dict[str, Any] = {"data": {"cid": node_id}} if node_id else {}
+                q_bytes = json.dumps(q_obj, separators=(",", ":")).encode("utf-8")
+            else:
+                cmd = CMD_DP_QUERY
+                q_obj = (
+                    {"cid": node_id}
+                    if node_id
+                    else {"gwId": self.device_id, "devId": self.device_id}
+                )
+                q_bytes = json.dumps(q_obj, separators=(",", ":")).encode("utf-8")
+            pkt = self._encode_packet(cmd, q_bytes, session_key)
+            data = await self._exchange(pkt, self.timeout, 4096)
+            if data is None:
+                self.last_error = "sem resposta à consulta de DPs"
+                return None
+            if not data:
+                self.last_error = "socket fechado pelo aparelho"
+                await self._drop()
+                return None
 
         for _cmd, body in self._extract_response_bodies(data, session_key):
             if not body:
@@ -594,21 +665,18 @@ class TuyaLocalDevice:
         return None
 
     async def async_ping(self) -> bool:
-        """Verifica se a porta TCP 6668 responde no host local."""
-        writer: asyncio.StreamWriter | None = None
-        try:
-            _, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, TCP_PORT),
-                timeout=min(self.timeout, 2.0),
-            )
+        """Confere a rota local: reaproveita o socket aberto ou abre um novo."""
+        if self._writer is not None and not self._writer.is_closing():
             return True
-        except (TimeoutError, OSError):
+        try:
+            async with self._lock:
+                await self._ensure_connected()
+            return True
+        except (TuyaLocalError, TimeoutError, OSError) as err:
+            self.last_error = str(err)
+            async with self._lock:
+                await self._drop()
             return False
-        finally:
-            if writer is not None:
-                writer.close()
-                with contextlib.suppress(Exception):
-                    await writer.wait_closed()
 
 
 async def async_discover_lan_devices(timeout: float = 3.5) -> dict[str, dict[str, str]]:

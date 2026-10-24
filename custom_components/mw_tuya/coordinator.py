@@ -8,6 +8,7 @@ colisão de tokens, dispositivos ou cenas.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -149,6 +150,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_stop_smartlife(self) -> None:
         if self.smartlife is not None:
             await self.hass.async_add_executor_job(self.smartlife.stop)
+
+    async def async_close_local_clients(self) -> None:
+        """Fecha os sockets TCP 6668 persistentes (unload/reload da integração)."""
+        for client in list(self.local_clients.values()):
+            with contextlib.suppress(Exception):
+                await client.async_close()
+        self.local_clients.clear()
 
     @callback
     def _on_push_event(self, event: dict[str, Any]) -> None:
@@ -380,6 +388,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         versions_override = self.configured_local_versions
 
         self.catalog_devices.clear()
+        for client in list(self.local_clients.values()):
+            with contextlib.suppress(Exception):
+                await client.async_close()
         self.local_clients.clear()
 
         for dev in devices:
