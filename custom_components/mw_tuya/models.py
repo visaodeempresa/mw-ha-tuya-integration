@@ -298,9 +298,9 @@ class MwTuyaDevice:
 
         dev_id = str(raw.get("id") or raw.get("device_id") or "")
         lan = lan_info or {}
-        default_ip, default_ver = DEFAULT_LOCAL_HOSTS.get(dev_id, ("", "3.3"))
-        local_ip = str(lan.get("ip") or raw.get("local_ip") or default_ip or "")
-        local_version = str(lan.get("version") or raw.get("local_version") or default_ver or "3.3")
+        default_ip, default_ver = DEFAULT_LOCAL_HOSTS.get(dev_id, ("", ""))
+        local_ip = str(lan.get("ip") or default_ip or raw.get("local_ip") or "")
+        local_version = str(lan.get("version") or default_ver or raw.get("local_version") or "3.3")
 
         dev = cls(
             device_id=dev_id,

@@ -3,6 +3,24 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.0] — 2026-11-01
+
+### Corrigido & Aprimorado (Resiliência Local Definitiva & Suporte a Sub-Dispositivos Zigbee)
+
+- **Suporte Nativo a Sub-Dispositivos Zigbee na LAN (Hub Zigbee X5 v3.5)**:
+  - Sub-dispositivos Zigbee (`sub=True`, `node_id != ""`) herdam automaticamente o IP e versão de protocolo (`192.168.2.34`, `v3.5`) do gateway pai que compartilha a mesma chave de rede local (`local_key`).
+  - Compartilhamento de Socket (Client Pooling): o gateway e todos os seus nós filhos compartilham a mesma instância de cliente persistente `TuyaLocalClient`, serializando requisições com `asyncio.Lock` e eliminando colisão de portas e saturação de conexões.
+  - Correção de payload em `CMD_DP_QUERY_NEW (0x10)` para nós Zigbee: remoção do encapsulamento duplo inválido `{"data": {"cid": ...}}` substituído pelo padrão Tuya de topo `{"cid": node_id}`, retornando DPs instantaneamente em <30 ms.
+- **Resolução de Conflitos e Churn de Protocolo em Motores de Cortina Wi-Fi (`cl`)**:
+  - `🟧🪟☀️ CORTINA DA SALA` (`eb2a205b8070f85f711uis`): IP atualizado de `.85` (v3.4 incorreto) para `.44` com protocolo nativo **`v3.3`**.
+  - Preservação do socket em comandos sem ACK explícito: dispositivos que executam o comando sem emitir frame de resposta não têm mais o socket derrubado desnecessariamente, eliminando o lockout de conexão do LWIP (6 a 20 s).
+  - Bloqueio de alternância destrutiva de versão: conexões cryptograficamente validadas (v3.4/v3.5) nunca mais são rebaixadas para v3.3 em caso de ausência de DPs no polling passivo.
+  - Polling local resiliente: ausência de DPs em aparelhos que não respondem a `DP_QUERY` não marca mais a entidade como offline caso o `async_ping` esteja ativo e respondendo.
+- **Descoberta Passiva UDP Contínua em Background (`TuyaUdpListener`)**:
+  - Implementado listener contínuo nas portas UDP `6666`, `6667` e `7000`, atualizando instantaneamente IPs dinâmicos (DHCP) e versões de protocolo sem necessidade de reinicialização do Home Assistant.
+- **Circuit Breaker para Esgotamento de Cota Tuya Cloud (`60001001`)**:
+  - Cooldown de 15 minutos ao detectar erro de cota na OpenAPI, evitando rajadas de chamadas rejeitadas na nuvem e priorizando a rota local direta.
+
 ## [0.4.6] — 2026-10-24
 
 ### Corrigido

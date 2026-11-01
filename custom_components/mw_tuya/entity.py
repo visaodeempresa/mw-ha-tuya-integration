@@ -59,7 +59,7 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
             return False
         if dev.is_local_configured and self.coordinator.local_ok.get(self._device_id, False):
             return True
-        return bool(dev.online or dev.status)
+        return bool(dev.online)
 
     @property
     def dp_value(self) -> Any:

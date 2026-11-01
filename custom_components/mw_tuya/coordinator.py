@@ -42,7 +42,13 @@ from .const import (
     STORAGE_VERSION,
 )
 from .dpspec import DpSpec, encode_local
-from .local import TuyaLocalClient, TuyaLocalError, async_discover_lan_devices
+from .local import (
+    DiscoveredLocalDevice,
+    TuyaLocalClient,
+    TuyaLocalError,
+    TuyaUdpListener,
+    async_discover_lan_devices,
+)
 from .models import MwTuyaDevice, MwTuyaScene
 from .push import TuyaPushHub, get_hub, status_from_event
 from .smartlife import SmartLifeError, SmartLifeSession, raw_from_device, specs_from_device
@@ -103,6 +109,8 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.local_ok: dict[str, bool] = {}
         self._local_misses: dict[str, int] = {}
         self._last_probe: dict[str, float] = {}
+        self._udp_listener: TuyaUdpListener | None = None
+        self._cloud_quota_cooldown_until: float = 0.0
 
         # Estatísticas de telemetria híbrida por device_id
         self.stats: dict[str, dict[str, int]] = {}
@@ -153,7 +161,10 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_close_local_clients(self) -> None:
         """Fecha os sockets TCP 6668 persistentes (unload/reload da integração)."""
-        for client in list(self.local_clients.values()):
+        if self._udp_listener is not None:
+            self._udp_listener.stop()
+            self._udp_listener = None
+        for client in set(self.local_clients.values()):
             with contextlib.suppress(Exception):
                 await client.async_close()
         self.local_clients.clear()
@@ -205,19 +216,19 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     @property
     def configured_local_hosts(self) -> dict[str, str]:
-        return dict(
-            self.config_entry.options.get(CONF_LOCAL_HOSTS)
-            or self.config_entry.data.get(CONF_LOCAL_HOSTS)
-            or {}
-        )
+        # Precedência: DEFAULT_LOCAL_HOSTS (curado) > options > setup inicial (data)
+        hosts = dict(self.config_entry.data.get(CONF_LOCAL_HOSTS) or {})
+        hosts.update(dict(self.config_entry.options.get(CONF_LOCAL_HOSTS) or {}))
+        hosts.update({did: ip for did, (ip, _ver) in DEFAULT_LOCAL_HOSTS.items()})
+        return hosts
 
     @property
     def configured_local_versions(self) -> dict[str, str]:
-        return dict(
-            self.config_entry.options.get(CONF_LOCAL_VERSIONS)
-            or self.config_entry.data.get(CONF_LOCAL_VERSIONS)
-            or {}
-        )
+        # Precedência: DEFAULT_LOCAL_HOSTS (curado) > options > setup inicial (data)
+        versions = dict(self.config_entry.data.get(CONF_LOCAL_VERSIONS) or {})
+        versions.update(dict(self.config_entry.options.get(CONF_LOCAL_VERSIONS) or {}))
+        versions.update({did: ver for did, (_ip, ver) in DEFAULT_LOCAL_HOSTS.items()})
+        return versions
 
     @property
     def active_devices(self) -> list[MwTuyaDevice]:
@@ -289,7 +300,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.lan_map.setdefault(did, info)
 
         for did, (def_ip, def_ver) in DEFAULT_LOCAL_HOSTS.items():
-            self.lan_map.setdefault(did, {"ip": def_ip, "version": def_ver})
+            self.lan_map[did] = {"ip": def_ip, "version": def_ver}
 
         if scan_lan:
             try:
@@ -400,6 +411,15 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 dev.local_version = versions_override[dev.device_id].strip()
             self.catalog_devices[dev.device_id] = dev
 
+        # Herança automática de IP/versão para sub-dispositivos Zigbee sem IP próprio
+        for dev in devices:
+            if dev.node_id and not dev.local_ip:
+                for parent in devices:
+                    if not parent.node_id and parent.local_ip and parent.local_key == dev.local_key:
+                        dev.local_ip = parent.local_ip
+                        dev.local_version = parent.local_version
+                        break
+
         selected_devs = [d for d in devices if d.device_id in selected_set]
 
         # Thing Model (OpenAPI): 1 chamada por produto (cache persistente)
@@ -446,6 +466,7 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 shadows = [[] for _ in selected_devs]
         else:
             shadows = [[] for _ in selected_devs]
+        client_pool: dict[tuple[str, str], TuyaLocalClient] = {}
         for dev, props in zip(selected_devs, shadows, strict=True):
             model = models_cache.get(dev.product_id or dev.device_id) or {}
             # Thing Model é a fonte da verdade; sem ele, a spec do Smart Life
@@ -455,13 +476,16 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     dev.dp_map[code] = spec.dp_id
             if props:
                 dev.apply_shadow_properties(props)
-            if dev.is_local_configured:
-                self.local_clients[dev.device_id] = TuyaLocalClient(
-                    host=dev.local_ip,
-                    device_id=dev.device_id,
-                    local_key=dev.local_key,
-                    version=dev.local_version,
-                )
+            if dev.is_local_configured and dev.supports_local:
+                pool_key = (dev.local_ip, dev.local_key)
+                if pool_key not in client_pool:
+                    client_pool[pool_key] = TuyaLocalClient(
+                        host=dev.local_ip,
+                        device_id=dev.device_id,
+                        local_key=dev.local_key,
+                        version=dev.local_version,
+                    )
+                self.local_clients[dev.device_id] = client_pool[pool_key]
                 self.local_ok.setdefault(dev.device_id, True)
 
         self.catalog_scenes = {s.scene_id: s for s in scenes}
@@ -478,6 +502,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 },
             }
         )
+        if self._udp_listener is None:
+            self._udp_listener = TuyaUdpListener(self._on_udp_device_discovered)
+            await self._udp_listener.async_start()
         _LOGGER.info(
             "MW Tuya [%s]: catálogo (%d devices, %d ativos, %d cenas, %d ativas, %d locais)",
             self.account_name,
@@ -487,6 +514,51 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             len(self.active_scenes),
             len(self.local_clients),
         )
+
+    @callback
+    def _on_udp_device_discovered(self, discovered: DiscoveredLocalDevice) -> None:
+        """Atualização dinâmica contínua de IP e versão via broadcast UDP."""
+        did = discovered.device_id
+        ip = discovered.ip
+        ver = discovered.version
+        if did not in self.catalog_devices:
+            return
+        dev = self.catalog_devices[did]
+        changed = False
+        if dev.local_ip != ip:
+            dev.local_ip = ip
+            changed = True
+        if ver and dev.local_version != ver:
+            dev.local_version = ver
+            changed = True
+        self.lan_map[did] = {"ip": ip, "version": ver, "product_key": discovered.product_key}
+        if changed and dev.is_local_configured and dev.supports_local:
+            pool_key = (ip, dev.local_key)
+            existing = next(
+                (
+                    c
+                    for d, c in self.local_clients.items()
+                    if self.catalog_devices.get(d)
+                    and (self.catalog_devices[d].local_ip, self.catalog_devices[d].local_key)
+                    == pool_key
+                ),
+                None,
+            )
+            client = existing or TuyaLocalClient(
+                host=ip,
+                device_id=did,
+                local_key=dev.local_key,
+                version=ver,
+            )
+            self.local_clients[did] = client
+            self.local_ok[did] = True
+            _LOGGER.debug(
+                "MW Tuya [%s]: rota local atualizada dinamicamente via UDP para %s: %s (v%s)",
+                self.account_name,
+                dev.name,
+                ip,
+                ver,
+            )
 
     # ------------------------------------------------------------------ Atualização
     async def _async_update_data(self) -> dict[str, Any]:
@@ -608,6 +680,11 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             dev.merge_local_dps(dps)
             dev.online = True
             self._local_misses[did] = 0
+            self.local_ok[did] = True
+            return
+        if await client.async_ping():
+            self.local_ok[did] = True
+            self._local_misses[did] = 0
             return
         misses = self._local_misses.get(did, 0) + 1
         self._local_misses[did] = misses
@@ -657,11 +734,28 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif def_ip:
                 dev.local_ip = str(def_ip)
                 dev.local_version = str(def_ver)
+            elif dev.node_id:
+                for parent in self.catalog_devices.values():
+                    if not parent.node_id and parent.local_ip and parent.local_key == dev.local_key:
+                        dev.local_ip = parent.local_ip
+                        dev.local_version = parent.local_version
+                        break
 
         routing = self.routing_mode
         local_client = self.local_clients.get(device_id)
-        if local_client is None and dev.is_local_configured:
-            local_client = TuyaLocalClient(
+        if local_client is None and dev.is_local_configured and dev.supports_local:
+            pool_key = (dev.local_ip, dev.local_key)
+            existing = next(
+                (
+                    c
+                    for d_id, c in self.local_clients.items()
+                    if self.catalog_devices.get(d_id)
+                    and (self.catalog_devices[d_id].local_ip, self.catalog_devices[d_id].local_key)
+                    == pool_key
+                ),
+                None,
+            )
+            local_client = existing or TuyaLocalClient(
                 host=dev.local_ip,
                 device_id=dev.device_id,
                 local_key=dev.local_key,
@@ -737,22 +831,32 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             payload.append({"code": target_code, "value": v})
 
         cloud_err: Exception | None = None
-        try:
-            if self.smartlife is not None and device_id in self.sl_devices:
-                try:
-                    await self.hass.async_add_executor_job(
-                        self.smartlife.send, device_id, payload
-                    )
-                except SmartLifeError:
-                    if self.client is None:
-                        raise
+        in_quota_cooldown = time.time() < self._cloud_quota_cooldown_until
+        if in_quota_cooldown and can_try_local:
+            cloud_err = TuyaApiError(
+                "60001001",
+                "Your controllable device pool quota is insufficient (cooldown ativo)",
+                "/commands",
+            )
+        else:
+            try:
+                if self.smartlife is not None and device_id in self.sl_devices:
+                    try:
+                        await self.hass.async_add_executor_job(
+                            self.smartlife.send, device_id, payload
+                        )
+                    except SmartLifeError:
+                        if self.client is None:
+                            raise
+                        await self.client.async_send_commands(device_id, payload)
+                elif self.client is not None:
                     await self.client.async_send_commands(device_id, payload)
-            elif self.client is not None:
-                await self.client.async_send_commands(device_id, payload)
-            else:
-                cloud_err = HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
-        except (SmartLifeError, TuyaApiError, TuyaAuthError, Exception) as err:
-            cloud_err = err
+                else:
+                    cloud_err = HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
+            except (SmartLifeError, TuyaApiError, TuyaAuthError, Exception) as err:
+                cloud_err = err
+                if "60001001" in str(err) or "quota" in str(err).lower():
+                    self._cloud_quota_cooldown_until = time.time() + 900.0
 
         if cloud_err is None:
             route = "cloud_fallback" if local_attempted else "cloud"

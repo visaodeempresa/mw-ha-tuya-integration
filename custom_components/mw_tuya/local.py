@@ -216,7 +216,12 @@ def parse_6699_frames(data: bytes, key: bytes) -> list[dict[str, Any]]:
             offset = end
             continue
         retcode = 0
-        if len(plain) >= 4 and plain[:1] != b"{" and plain[:4] == b"\x00\x00\x00\x00":
+        if (
+            len(plain) >= 4
+            and plain[:1] != b"{"
+            and not plain.startswith(b"3.")
+            and plain[:3] == b"\x00\x00\x00"
+        ):
             retcode = struct.unpack(">I", plain[:4])[0]
             plain = plain[4:]
         frames.append({"seq": seq, "cmd": cmd, "retcode": retcode, "body": plain})
@@ -306,6 +311,51 @@ async def async_discover_local_devices(
             tr.close()
 
     return found
+
+
+class TuyaUdpListener:
+    """Ouvinte contínuo em background para broadcasts UDP Tuya (portas 6666, 6667 e 7000)."""
+
+    def __init__(self, on_discovered: Any) -> None:
+        self.on_discovered = on_discovered
+        self._transports: list[asyncio.BaseTransport] = []
+        self._running = False
+
+    async def async_start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        loop = asyncio.get_running_loop()
+        kwargs: dict[str, Any] = {"reuse_port": True} if os.name != "nt" else {}
+
+        class _Protocol(asyncio.DatagramProtocol):
+            def __init__(self, cb: Any) -> None:
+                self.cb = cb
+
+            def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+                dev = decode_udp_broadcast(data)
+                if dev is not None:
+                    if not dev.ip and addr:
+                        dev.ip = addr[0]
+                    self.cb(dev)
+
+        for port in UDP_PORTS:
+            try:
+                transport, _ = await loop.create_datagram_endpoint(
+                    lambda: _Protocol(self.on_discovered),
+                    local_addr=("0.0.0.0", port),
+                    **kwargs,
+                )
+                self._transports.append(transport)
+                _LOGGER.debug("TuyaUdpListener: escutando UDP %s", port)
+            except OSError as err:
+                _LOGGER.debug("TuyaUdpListener: não foi possível escutar UDP %s: %s", port, err)
+
+    def stop(self) -> None:
+        self._running = False
+        for tr in self._transports:
+            tr.close()
+        self._transports.clear()
 
 
 class TuyaLocalDevice:
@@ -448,7 +498,7 @@ class TuyaLocalDevice:
             if len(raw_body) <= tail_len:
                 continue
             inner = raw_body[:-tail_len]
-            if len(inner) >= 4 and inner[:4] == b"\x00\x00\x00\x00":
+            if len(inner) >= 4 and inner[:1] != b"{" and not inner.startswith(b"3."):
                 inner = inner[4:]
             if not inner:
                 out.append((frame["cmd"], b""))
@@ -534,6 +584,13 @@ class TuyaLocalDevice:
         """Envia DPs ao dispositivo via TCP 6668 com auto-recuperação de versão do protocolo."""
         if len(self._real_key) != 16:
             raise TuyaLocalError(f"{self.device_id}: local_key inválida (len != 16)")
+        if (
+            self._connected_version in ("3.4", "3.5")
+            and self._session_key is not None
+            and await self._set_dps_once(dps, node_id=node_id)
+        ):
+            return True
+
         last_err: Exception | None = None
         versions_to_try = [self.version]
         if self.version in ("3.4", "3.5"):
@@ -575,9 +632,8 @@ class TuyaLocalDevice:
             )
             data = await self._exchange(pkt, self.COMMAND_TIMEOUT, 2048)
             if data is None:
-                # Sem ACK: presume-se aceito (semântica antiga), mas o socket é
-                # descartado — se o aparelho sumiu, a próxima operação reconecta.
-                await self._drop()
+                # Sem ACK: dispositivo aceitou e processou o comando sem emitir frame de resposta.
+                # Mantém o socket aberto para prevenir lockout de reconexão do LWIP.
                 return True
             if not data:
                 # Aparelho fechou a conexão sem bytes: retry em socket novo.
@@ -590,6 +646,8 @@ class TuyaLocalDevice:
         """Consulta os DPs atuais via `DP_QUERY` com auto-recuperação de versão."""
         if len(self._real_key) != 16:
             return None
+        if self._connected_version in ("3.4", "3.5") and self._session_key is not None:
+            return await self._get_dps_once(node_id=node_id)
         orig_ver = self.version
         versions_to_try = [self.version]
         if self.version in ("3.4", "3.5"):
@@ -615,7 +673,7 @@ class TuyaLocalDevice:
                 return None
             if self.version in ("3.4", "3.5"):
                 cmd = CMD_DP_QUERY_NEW
-                q_obj: dict[str, Any] = {"data": {"cid": node_id}} if node_id else {}
+                q_obj: dict[str, Any] = {"cid": node_id} if node_id else {}
                 q_bytes = json.dumps(q_obj, separators=(",", ":")).encode("utf-8")
             else:
                 cmd = CMD_DP_QUERY

@@ -140,3 +140,47 @@ def test_coordinator_ignora_auth_error_da_nuvem_em_modo_hibrido(cw, dev):
     assert dev.device_id in data["devices"]
     assert data["devices"][dev.device_id].name == dev.name
 
+
+def test_subdevice_herda_gateway_e_reaproveita_client(cw, models):
+    gw = models.MwTuyaDevice(
+        device_id="eb_gateway_01",
+        name="Hub Zigbee",
+        category="wg2",
+        local_key="1234567890123456",
+        local_ip="192.168.2.34",
+        local_version="3.5",
+        online=True,
+    )
+    sub = models.MwTuyaDevice(
+        device_id="eb_sub_01",
+        name="Cortina Suíte",
+        category="cl",
+        local_key="1234567890123456",
+        sub=True,
+        node_id="a4c138e199c5b3df",
+        dp_map={"control": 1},
+        online=True,
+    )
+    c = _coordinator(cw, gw)
+    c.catalog_devices = {gw.device_id: gw, sub.device_id: sub}
+    c._cloud_quota_cooldown_until = 0.0
+
+    class FakeLocal:
+        def __init__(self):
+            self.calls = []
+
+        async def async_set_dps(self, dps, node_id=""):
+            self.calls.append((dps, node_id))
+            return True
+
+    fake = FakeLocal()
+    c.local_clients[gw.device_id] = fake
+
+    route = asyncio.run(c.async_send_device_commands(sub.device_id, {"control": "open"}))
+    assert route == "local"
+    assert sub.local_ip == "192.168.2.34"
+    assert sub.local_version == "3.5"
+    assert c.local_clients[sub.device_id] is fake
+    assert fake.calls == [({"1": "open"}, "a4c138e199c5b3df")]
+
+

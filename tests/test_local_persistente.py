@@ -168,3 +168,58 @@ def test_chave_invalida_continua_erro(local):
     )
     with pytest.raises(TuyaLocalError):
         _rodar(cli.async_set_dps({"20": True}))
+
+
+class _ServidorTuyaSilencioso:
+    """Servidor TCP que aceita conexão e lê dados, mas não responde nada (sem ACK)."""
+
+    def __init__(self) -> None:
+        self.conexoes = 0
+        self.comandos = 0
+        self._server: asyncio.Server | None = None
+        self._clientes: list[asyncio.StreamWriter] = []
+
+    async def iniciar(self) -> int:
+        self._server = await asyncio.start_server(self._atender, "127.0.0.1", 0)
+        return self._server.sockets[0].getsockname()[1]
+
+    async def _atender(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self.conexoes += 1
+        self._clientes.append(writer)
+        try:
+            while True:
+                data = await reader.read(2048)
+                if not data:
+                    return
+                self.comandos += 1
+        except (ConnectionError, OSError):
+            return
+
+    async def parar(self) -> None:
+        for w in self._clientes:
+            with contextlib.suppress(Exception):
+                w.close()
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+
+
+async def _socket_preservado_em_comando_sem_ack():
+    """Aparelho que não responde ACK mantém o socket aberto para o próximo comando."""
+    srv = _ServidorTuyaSilencioso()
+    porta = await srv.iniciar()
+    try:
+        cli = _cliente(porta)
+        cli.COMMAND_TIMEOUT = 0.05
+        assert await cli.async_set_dps({"20": True}) is True
+        assert await cli.async_set_dps({"20": False}) is True
+        await cli.async_close()
+        assert srv.conexoes == 1
+        assert srv.comandos == 2
+    finally:
+        await srv.parar()
+
+
+def test_socket_preservado_em_comando_sem_ack(local):
+    _rodar(_socket_preservado_em_comando_sem_ack())
+
