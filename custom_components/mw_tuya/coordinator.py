@@ -791,7 +791,11 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.local_ok[device_id] = True
                     dev.status.update(commands)
                     for c, v in commands.items():
+                        c_dp = dev.resolve_dp_id(c)
                         for alias in DP_ALIASES.get(c, ()):
+                            alias_dp = dev.resolve_dp_id(alias)
+                            if alias_dp is not None and c_dp is not None and alias_dp != c_dp:
+                                continue
                             dev.status[alias] = v
                     self.async_set_updated_data(self.data or {})
                     return "local"
@@ -863,7 +867,11 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._record_stat(device_id, route)
             dev.status.update(commands)
             for c, v in commands.items():
+                c_dp = dev.resolve_dp_id(c)
                 for alias in DP_ALIASES.get(c, ()):
+                    alias_dp = dev.resolve_dp_id(alias)
+                    if alias_dp is not None and c_dp is not None and alias_dp != c_dp:
+                        continue
                     dev.status[alias] = v
             self.async_set_updated_data(self.data or {})
             return route
@@ -884,7 +892,11 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self.local_ok[device_id] = True
                     dev.status.update(commands)
                     for c, v in commands.items():
+                        c_dp = dev.resolve_dp_id(c)
                         for alias in DP_ALIASES.get(c, ()):
+                            alias_dp = dev.resolve_dp_id(alias)
+                            if alias_dp is not None and c_dp is not None and alias_dp != c_dp:
+                                continue
                             dev.status[alias] = v
                     self.async_set_updated_data(self.data or {})
                     return "local_fallback"

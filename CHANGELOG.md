@@ -3,6 +3,15 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.1] — 2026-11-02
+
+### Corrigido (Isolamento Estrito de Datapoints & Desacoplamento de LED / Força)
+
+- **Desacoplamento Completo entre `switch_led` e `switch`**:
+  - Removido alias mútuo incorreto em `DP_ALIASES` entre `switch_led` e `switch`/`switch_1`. Dispositivos multifuncionais (umidificadores, purificadores, climatizadores, ar-condicionados) possuem o controle de energia (`switch` / DP 1) e controle de iluminação/noturno (`switch_led` / DP 5) como entidades completamente independentes.
+  - Blindagem de aliasing cruzado em `models.py`, `coordinator.py` e `entity.py`: agora, se o aparelho possui mapeamentos de DP físicos distintos (`alias_dp != dp_num`), nenhum DP pode mais contaminar ou sobrescrever o status de outro alias durante atualizações locais (`merge_local_dps`), envios de comando (`async_send_device_commands`) ou leitura de propriedades (`status_of`).
+  - Adicionado teste de regressão automatizado `test_switch_and_switch_led_independence_on_humidifier` em `tests/test_models.py`.
+
 ## [0.5.0] — 2026-11-01
 
 ### Corrigido & Aprimorado (Resiliência Local Definitiva & Suporte a Sub-Dispositivos Zigbee)

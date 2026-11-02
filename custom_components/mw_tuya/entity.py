@@ -75,7 +75,11 @@ class MwTuyaEntity(CoordinatorEntity[MwTuyaCoordinator]):
         val = dev.status.get(code)
         if val is not None:
             return val
+        code_dp = dev.resolve_dp_id(code)
         for alias in DP_ALIASES.get(code, ()):
+            alias_dp = dev.resolve_dp_id(alias)
+            if alias_dp is not None and code_dp is not None and alias_dp != code_dp:
+                continue
             val = dev.status.get(alias)
             if val is not None:
                 return val

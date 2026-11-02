@@ -214,3 +214,31 @@ def test_resolve_dp_fallback_categoria_quando_spec_sem_dp_id(models):
     assert dev.resolve_dp_id("cur_voltage") is None
 
 
+def test_switch_and_switch_led_independence_on_humidifier(models):
+    """Garante que switch (força) e switch_led (luz) permaneçam estritamente independentes."""
+    dev = models.MwTuyaDevice(
+        device_id="jsq_test",
+        name="Umidificador",
+        category="jsq",
+        local_key="0123456789abcdef",
+        dp_map={"switch": 1, "switch_led": 5},
+    )
+    dev.status = {"switch": False, "switch_led": False}
+
+    # Atualiza switch_led via merge_local_dps (DP 5 = True)
+    dev.merge_local_dps({5: True})
+    assert dev.status["switch_led"] is True
+    assert dev.status["switch"] is False, "switch_led NÃO pode alterar o switch principal"
+
+    # Atualiza switch via merge_local_dps (DP 1 = True)
+    dev.merge_local_dps({1: True})
+    assert dev.status["switch"] is True
+    assert dev.status["switch_led"] is True
+
+    # Desliga switch_led (DP 5 = False)
+    dev.merge_local_dps({5: False})
+    assert dev.status["switch_led"] is False
+    assert dev.status["switch"] is True, "Desligar o LED não pode desligar o umidificador"
+
+
+

@@ -140,7 +140,11 @@ class MwTuyaDevice:
     def spec(self, code: str) -> DpSpec | None:
         if code in self.specs:
             return self.specs[code]
+        code_dp = self.resolve_dp_id(code)
         for alias in DP_ALIASES.get(code, ()):
+            alias_dp = self.resolve_dp_id(alias)
+            if alias_dp is not None and code_dp is not None and alias_dp != code_dp:
+                continue
             if alias in self.specs:
                 return self.specs[alias]
         return None
@@ -149,7 +153,11 @@ class MwTuyaDevice:
         """O DP existe no aparelho (pelo Thing Model ou pelo status observado)."""
         if code in self.specs or code in self.status:
             return True
+        code_dp = self.resolve_dp_id(code)
         for alias in DP_ALIASES.get(code, ()):
+            alias_dp = self.resolve_dp_id(alias)
+            if alias_dp is not None and code_dp is not None and alias_dp != code_dp:
+                continue
             if alias in self.specs or alias in self.status:
                 return True
         return False
@@ -223,6 +231,9 @@ class MwTuyaDevice:
             decoded = decode_local(code, val)
             self.status[code] = decoded
             for alias in DP_ALIASES.get(code, ()):
+                alias_dp = self.resolve_dp_id(alias)
+                if alias_dp is not None and alias_dp != dp_num:
+                    continue
                 self.status[alias] = decoded
 
     def _dp_to_code_map(self) -> dict[int, str]:

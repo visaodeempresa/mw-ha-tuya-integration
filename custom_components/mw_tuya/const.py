@@ -101,9 +101,8 @@ DP_ALIASES: dict[str, tuple[str, ...]] = {
     "scene_data_v2": ("scene_data",),
     "countdown": ("countdown_1",),
     "countdown_1": ("countdown",),
-    "switch_led": ("switch", "switch_1"),
-    "switch": ("switch_1", "switch_led"),
-    "switch_1": ("switch", "switch_led"),
+    "switch": ("switch_1",),
+    "switch_1": ("switch",),
 }
 
 # Mapeamento padrão entre códigos semânticos da Tuya Cloud e IDs de DP locais (fallback)
