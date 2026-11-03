@@ -1,0 +1,6 @@
+# Cursor Rules — MW Tuya Integration
+- Respeitar a diretriz Local First: priorizar controle local via TCP 6668.
+- Proibido qualquer bloqueio de cota artificial localmente.
+- Dispositivos Wi-Fi devem ser tratados como operando sem internet (Air-Gapping via Deco NO-NET).
+- Manter suporte adaptativo para as versões de protocolo Tuya 3.5, 3.4 e 3.3.
+- Testar sempre com pytest antes de finalizar alterações.

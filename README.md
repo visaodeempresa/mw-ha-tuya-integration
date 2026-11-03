@@ -56,3 +56,23 @@ data:
 2. Este repositório utiliza branches padronizadas (`develop` → `main`) e automação de releases (`.github/workflows/auto-release.yml` e `ci.yml`):
    - Todo merge na `main` que altere `custom_components/mw_tuya/**` calcula automaticamente a próxima versão semântica (`feat:` → minor, `fix:` → patch, `BREAKING` → major), atualiza o `manifest.json` e o `pyproject.toml`, assina a tag `vX.Y.Z`, sincroniza de volta com `develop` e publica a Release com `mw_tuya.zip`.
    - O **HACS** detecta a nova tag/release e sinaliza a atualização diretamente nas notificações do Home Assistant.
+
+---
+
+## Soberania Local & Arquitetura Air-Gapped (Wi-Fi sem Internet)
+
+A integração foi projetada e comprovada para operar em modo **Air-Gapped**, permitindo que dispositivos Wi-Fi da residência fiquem com a internet totalmente bloqueada no roteador (via perfil de controle parental Deco `NO-NET`):
+- **Isolamento de Nuvem**: Dispositivos aparecem com status `"online": false` nos servidores Tuya, impedindo telemetria externa e updates indesejados de firmware (OTA).
+- **Controle 100% Local**: O Home Assistant Yellow (multihomed em `192.168.1.70` e `192.168.2.70`) comanda os dispositivos diretamente via TCP 6668 com latência de **40 ms a 60 ms**.
+- **Diretriz de Expansão**: Consulte o guia detalhado em [`docs/01-AIR-GAPPED-WIFI-ARCHITECTURE-AND-STRATEGY.md`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/docs/01-AIR-GAPPED-WIFI-ARCHITECTURE-AND-STRATEGY.md) para o plano de isolamento dos mais de 70 dispositivos da Rede 2 e quase 20 da Rede 1.
+
+---
+
+## Diretrizes de IA e Desenvolvimento Autônomo
+
+Para desenvolvimento com assistentes de IA, consulte as diretrizes dedicadas:
+- [`GEMINI.md`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/GEMINI.md) — Regras para Google Gemini & Antigravity (Prioridade #1)
+- [`AGENTS.md`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/AGENTS.md) — Regras universais para agentes autônomos (OpenCode / Multi-Agent)
+- [`CLAUDE.md`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/CLAUDE.md) — Instruções para Claude Code
+- [`.cursorrules`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/.cursorrules) e [`.windsurfrules`](file:///Volumes/SSD-T1-01/OPENCODE-SSD/mw-ha-tuya-integration/.windsurfrules) — Configurações para Cursor e Windsurf IDEs
+

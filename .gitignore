@@ -5,11 +5,8 @@
 output/
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Arquivos e diretórios de ferramentas de IA — proibidos neste repositório.
+# Arquivos e diretórios temporários de IA
 # ─────────────────────────────────────────────────────────────────────────────
-CLAUDE.md
-GEMINI.md
-AGENTS.md
 .claude/
 .cursor/
 .gemini/
