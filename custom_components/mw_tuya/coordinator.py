@@ -679,6 +679,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if dps:
             dev.merge_local_dps(dps)
             dev.online = True
+            dev.local_version = client.version
+            if did in self.lan_map:
+                self.lan_map[did]["version"] = client.version
             self._local_misses[did] = 0
             self.local_ok[did] = True
             return
@@ -789,6 +792,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._record_stat(device_id, "local_ok")
                     self._local_misses[device_id] = 0
                     self.local_ok[device_id] = True
+                    dev.local_version = local_client.version
+                    if device_id in self.lan_map:
+                        self.lan_map[device_id]["version"] = local_client.version
                     dev.status.update(commands)
                     for c, v in commands.items():
                         c_dp = dev.resolve_dp_id(c)
@@ -835,32 +841,28 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             payload.append({"code": target_code, "value": v})
 
         cloud_err: Exception | None = None
-        in_quota_cooldown = time.time() < self._cloud_quota_cooldown_until
-        if in_quota_cooldown and can_try_local:
-            cloud_err = TuyaApiError(
-                "60001001",
-                "Your controllable device pool quota is insufficient (cooldown ativo)",
-                "/commands",
-            )
-        else:
-            try:
-                if self.smartlife is not None and device_id in self.sl_devices:
-                    try:
-                        await self.hass.async_add_executor_job(
-                            self.smartlife.send, device_id, payload
-                        )
-                    except SmartLifeError:
-                        if self.client is None:
-                            raise
-                        await self.client.async_send_commands(device_id, payload)
-                elif self.client is not None:
+        try:
+            if self.smartlife is not None:
+                try:
+                    await self.hass.async_add_executor_job(
+                        self.smartlife.send, device_id, payload
+                    )
+                except Exception as sl_err:
+                    _LOGGER.debug(
+                        "MW Tuya [%s]: envio Smart Life falhou para %s (%s)",
+                        self.account_name,
+                        dev.name,
+                        sl_err,
+                    )
+                    if self.client is None:
+                        raise
                     await self.client.async_send_commands(device_id, payload)
-                else:
-                    cloud_err = HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
-            except (SmartLifeError, TuyaApiError, TuyaAuthError, Exception) as err:
-                cloud_err = err
-                if "60001001" in str(err) or "quota" in str(err).lower():
-                    self._cloud_quota_cooldown_until = time.time() + 900.0
+            elif self.client is not None:
+                await self.client.async_send_commands(device_id, payload)
+            else:
+                cloud_err = HomeAssistantError(f"{dev.name} sem rota de nuvem disponível")
+        except (SmartLifeError, TuyaApiError, TuyaAuthError, Exception) as err:
+            cloud_err = err
 
         if cloud_err is None:
             route = "cloud_fallback" if local_attempted else "cloud"
@@ -890,6 +892,9 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._record_stat(device_id, "local_fallback")
                     self._local_misses[device_id] = 0
                     self.local_ok[device_id] = True
+                    dev.local_version = local_client.version
+                    if device_id in self.lan_map:
+                        self.lan_map[device_id]["version"] = local_client.version
                     dev.status.update(commands)
                     for c, v in commands.items():
                         c_dp = dev.resolve_dp_id(c)

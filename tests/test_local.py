@@ -61,3 +61,30 @@ def test_decodificacao_pacote_udp_broadcast_55aa_e_6699(local):
     assert dev_35.device_id == "eb07ae42491687fd313aiy"
     assert dev_35.ip == "192.168.2.34"
     assert dev_35.version == "3.5"
+
+
+def test_auto_recuperacao_tenta_todas_as_versoes(local):
+    """Garante que a lista de versões a tentar inclui 3.3, 3.4 e 3.5 partindo de qualquer versão inicial."""
+    import asyncio
+
+    dev = local.TuyaLocalDevice(
+        host="192.168.2.77",
+        device_id="ebe1ff878045b13491togt",
+        local_key="0123456789abcdef",
+        version="3.4",
+    )
+
+    tentadas = []
+
+    async def mock_set_once(dps, node_id=""):
+        tentadas.append(dev.version)
+        if dev.version == "3.5":
+            return True
+        raise local.TuyaLocalError(f"Simulando falha na versão {dev.version}")
+
+    dev._set_dps_once = mock_set_once
+    ok = asyncio.run(dev.async_set_dps({"20": False}, attempts=1))
+    assert ok is True
+    assert tentadas == ["3.4", "3.5"]
+    assert dev.version == "3.5"
+

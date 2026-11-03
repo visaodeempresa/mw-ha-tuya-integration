@@ -593,10 +593,9 @@ class TuyaLocalDevice:
 
         last_err: Exception | None = None
         versions_to_try = [self.version]
-        if self.version in ("3.4", "3.5"):
-            versions_to_try.append("3.3")
-        else:
-            versions_to_try.append("3.4")
+        for v in ("3.5", "3.4", "3.3"):
+            if v not in versions_to_try:
+                versions_to_try.append(v)
 
         orig_ver = self.version
         for ver in versions_to_try:
@@ -606,6 +605,13 @@ class TuyaLocalDevice:
                     await asyncio.sleep(0.2 * attempt)
                 try:
                     if await self._set_dps_once(dps, node_id=node_id):
+                        if ver != orig_ver:
+                            _LOGGER.info(
+                                "MW Tuya [%s]: protocolo local auto-recuperado para %s (era %s)",
+                                self.host,
+                                ver,
+                                orig_ver,
+                            )
                         return True
                 except TuyaLocalError as err:
                     last_err = err
@@ -650,15 +656,21 @@ class TuyaLocalDevice:
             return await self._get_dps_once(node_id=node_id)
         orig_ver = self.version
         versions_to_try = [self.version]
-        if self.version in ("3.4", "3.5"):
-            versions_to_try.append("3.3")
-        else:
-            versions_to_try.append("3.4")
+        for v in ("3.5", "3.4", "3.3"):
+            if v not in versions_to_try:
+                versions_to_try.append(v)
 
         for ver in versions_to_try:
             self.version = ver
             dps = await self._get_dps_once(node_id=node_id)
             if dps is not None:
+                if ver != orig_ver:
+                    _LOGGER.info(
+                        "MW Tuya [%s]: leitura local auto-recuperou protocolo para %s (era %s)",
+                        self.host,
+                        ver,
+                        orig_ver,
+                    )
                 return dps
         self.version = orig_ver
         return None

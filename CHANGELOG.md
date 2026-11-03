@@ -3,6 +3,20 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.2] — 2026-11-03
+
+### Corrigido (Eliminação de Bloqueio Artificial de Cota & Auto-Recuperação Total 3.3/3.4/3.5)
+
+- **Eliminação Definitiva do Bloqueio de Cota Local (Cooldown Artificial)**:
+  - Removido o cooldown de 15 minutos (`_cloud_quota_cooldown_until`) que bloqueava requisições legítimas e sintetizava erros falsos `[60001001] (cooldown ativo)`.
+  - Tratamento de cota ilimitada local: a integração nunca mais bloqueia chamadas ou inventa erros de cota localmente.
+  - Prioridade estrita Local First: comandos sempre tentam envio direto local via TCP 6668. Em caso de falha local real, a integração chaveia de forma transparente para Nuvem (Smart Life sem limites ou OpenAPI).
+  - Apenas se AMBOS os canais (Local e Cloud) falharem fisicamente na rede é que a exceção é propagada ao usuário, informando exatamente os motivos de cada canal.
+- **Auto-Recuperação Completa de Versão do Protocolo Local (`3.3`, `3.4` e `3.5`)**:
+  - Corrigido o algoritmo de auto-recuperação em `async_set_dps` e `async_get_dps`: anteriormente, a lista de fallback só tentava 2 versões e excluía `v3.5` quando partindo de `v3.4`, impedindo a lâmpada do quarto (`192.168.2.77`, nativa v3.5) de recuperar conexão se o cache ou descoberta estivesse em 3.4.
+  - Agora, todas as 3 versões (`3.5`, `3.4`, `3.3`) são iteradas de forma adaptativa e inteligente.
+  - Ao obter sucesso, a versão correta é gravada imediatamente em `self.version`, `dev.local_version` e `coordinator.lan_map`, fixando a rota rápida sem sobrecarga nas chamadas seguintes.
+
 ## [0.5.1] — 2026-11-02
 
 ### Corrigido (Isolamento Estrito de Datapoints & Desacoplamento de LED / Força)
