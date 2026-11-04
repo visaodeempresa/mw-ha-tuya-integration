@@ -145,6 +145,8 @@ def test_purificador_vira_fan_com_preset_e_velocidade(models, dpspec):
     assert fan.extra["speed"] == "speed" and fan.extra["preset"] == "mode"
     assert by["filter_reset"].platform == "button"
     assert by["lock"].platform == "switch" and by["lock"].entity_category == "config"
+    assert by["speed"].platform == "select" and by["speed"].enabled_default is True
+    assert by["mode"].platform == "select" and by["mode"].enabled_default is True
 
 
 def test_janela_mc_usa_wd_control_e_estado(models, dpspec):

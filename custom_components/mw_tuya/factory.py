@@ -111,7 +111,11 @@ def _fan(dev: MwTuyaDevice, used: set[str]) -> list[EntitySpec]:
         "direction": dev.first("fan_direction"),
         "oscillate": dev.first("switch_horizontal", "switch_vertical"),
     }
-    used.update(c for c in extra.values() if c)
+    # Mantém switch e secundários em used, mas permite que speed e preset
+    # quando enum Tuya também gerem select dedicado (padrão LocalTuya / cards de nível).
+    for k, c in extra.items():
+        if c and k not in ("speed", "preset"):
+            used.add(c)
     return [_mk(dev, "fan", sw, None, extra=extra)]
 
 
@@ -295,14 +299,15 @@ def _generic(dev: MwTuyaDevice, code: str) -> EntitySpec | None:
         if isinstance(cur, str) and cur and cur not in opts:
             opts.append(cur)
         if writable and readable and opts:
+            is_priority = code in ("speed", "mode")
             return _mk(
                 dev,
                 "select",
                 code,
                 name,
                 options=opts,
-                entity_category="config",
-                enabled_default=False,
+                entity_category=None if is_priority else "config",
+                enabled_default=is_priority,
             )
         if readable:
             return _mk(

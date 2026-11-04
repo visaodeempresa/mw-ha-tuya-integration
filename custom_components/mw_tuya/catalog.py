@@ -202,6 +202,9 @@ LABELS: dict[str, str] = {
     "window_state": "Janela",
     "charge_status": "Carregamento",
     "status": "Status",
+    "speed": "Velocidade",
+    "fan_speed": "Velocidade",
+    "workmode": "Modo",
     "mode": "Modo",
     "work_mode": "Modo",
 }

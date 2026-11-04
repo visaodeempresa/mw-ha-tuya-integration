@@ -3,6 +3,14 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.5] — 2026-11-04
+
+### Adicionado
+- **Selects Nativos de Velocidade e Modo para Purificadores/Ventiladores (`speed` e `mode`)**:
+  - `custom_components/mw_tuya/factory.py`: Não oculta mais os DPs enum `speed` (DP 4: "1".."5") e `mode` (DP 3: "fresh", "night", "noman") quando associados à entidade principal `fan`.
+  - Geração automática de entidades `select` dedicadas habilitadas por padrão (`enabled_default=True`), permitindo controle 1:1 via cards de nível/seletores da família MW com 100% de paridade com LocalTuya.
+  - `custom_components/mw_tuya/catalog.py`: Rótulos em português para `speed` ("Velocidade"), `fan_speed` ("Velocidade") e `workmode` ("Modo").
+
 ## [0.5.4] — 2026-11-03
 
 ### Corrigido (Blindagem Local-First Soberana & Prevenção de Flapping de Status)
