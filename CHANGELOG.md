@@ -3,6 +3,17 @@
 Formato: [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) ·
 Versionamento: [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.5.4] — 2026-11-03
+
+### Corrigido (Blindagem Local-First Soberana & Prevenção de Flapping de Status)
+
+- **Proteção Estrita contra Sobrescrita por Nuvem Desatualizada (`hybrid_local_first`)**:
+  - Em redes IoT com soberania de dados e isolamento WAN (`NO-NET`), os dispositivos Wi-Fi não enviam telemetria externa para a Tuya Cloud.
+  - O polling em lote da Tuya Cloud OpenAPI e Smart Life SDK agora checa se o dispositivo possui comunicação local ativa (`is_local_configured` e `local_ok`).
+  - DPs locais reais (TCP 6668) nunca mais são sobrescritos por status desatualizados (`False` ou `0 W`) vindos da nuvem, eliminando as oscilações periódicas (flapping) em tomadas e climatizadores.
+- **Redução do Intervalo de Re-Probe Local**:
+  - `LOCAL_REPROBE_SECONDS` ajustado de 300s (5 min) para 15s, permitindo auto-recuperação instantânea do canal TCP em caso de variação transitória de latência no Wi-Fi.
+
 ## [0.5.2] — 2026-11-03
 
 ### Corrigido (Eliminação de Bloqueio Artificial de Cota & Auto-Recuperação Total 3.3/3.4/3.5)

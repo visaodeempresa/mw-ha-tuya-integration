@@ -57,7 +57,7 @@ _LOGGER = logging.getLogger(__name__)
 
 LOCAL_POLL_CONCURRENCY = 8
 LOCAL_POLL_TIMEOUT = 4.0
-LOCAL_REPROBE_SECONDS = 300
+LOCAL_REPROBE_SECONDS = 15
 
 
 def _msg_cena(scene: MwTuyaScene, err: Exception) -> str:
@@ -579,7 +579,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     k: v for k, v in (sdev.status or {}).items() if k not in seen or seen[k] != v
                 }
                 if changed:
-                    dev.merge_cloud_status(changed)
+                    is_local_active = (
+                        routing == ROUTING_HYBRID_LOCAL_FIRST
+                        and dev.is_local_configured
+                        and self.local_ok.get(did, False)
+                    )
+                    if not is_local_active:
+                        dev.merge_cloud_status(changed)
                     seen.update(changed)
 
         # 1. Atualiza estado da nuvem em 1 única chamada por conta (econômico em QPS)
@@ -597,7 +603,13 @@ class MwTuyaCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         dev.online = bool(raw.get("online", dev.online))
                         if raw.get("local_key"):
                             dev.local_key = str(raw["local_key"])
-                        dev.merge_cloud_status(raw.get("status") or [])
+                        is_local_active = (
+                            routing == ROUTING_HYBRID_LOCAL_FIRST
+                            and dev.is_local_configured
+                            and self.local_ok.get(did, False)
+                        )
+                        if not is_local_active:
+                            dev.merge_cloud_status(raw.get("status") or [])
                     else:
                         self.catalog_devices[did] = MwTuyaDevice.from_api(
                             raw, self.lan_map.get(did)
